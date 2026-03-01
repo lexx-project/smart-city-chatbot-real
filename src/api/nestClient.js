@@ -1,66 +1,53 @@
-const DEFAULT_TIMEOUT_MS = 10000;
+require("dotenv").config(); // Wajib biar file .env kebaca
+const axios = require("axios");
 
-const getBaseUrl = () => {
-    const raw = process.env.NEST_API_BASE_URL || 'http://localhost:3000';
-    return String(raw).replace(/\/+$/, '');
-};
+// Ambil URL, dan pastikan diakhiri dengan garis miring (/) biar axios gak bingung
+let BASE_URL = process.env.NEST_API_BASE_URL || "http://localhost:3000/api/v1";
+if (!BASE_URL.endsWith("/")) {
+  BASE_URL += "/";
+}
 
-const buildUrl = (path) => {
-    const normalizedPath = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
-    return `${getBaseUrl()}${normalizedPath}`;
-};
+const nestClient = axios.create({
+  baseURL: BASE_URL,
+  timeout: 10000,
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  },
+});
 
-const request = async (method, path, options = {}) => {
-    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+// ==========================================
+// CCTV 1: CEK SEBELUM NEMBAK
+// ==========================================
+nestClient.interceptors.request.use((config) => {
+  // Kalau endpoint diawali '/', hapus '/' nya biar gak nabrak
+  if (config.url.startsWith("/")) {
+    config.url = config.url.substring(1);
+  }
 
-    try {
-        const response = await fetch(buildUrl(path), {
-            method,
-            headers: {
-                Accept: 'application/json',
-                ...(options.headers || {}),
-            },
-            signal: controller.signal,
-        });
+  // Print alamat lengkapnya ke terminal
+  console.log(
+    `[API MENCARI JALAN] Nembak ke -> ${config.baseURL}${config.url}`,
+  );
 
-        const text = await response.text();
-        let data = null;
+  return config;
+});
 
-        if (text) {
-            try {
-                data = JSON.parse(text);
-            } catch {
-                data = text;
-            }
-        }
+// ==========================================
+// CCTV 2: CEK KALAU NYASAR (ERROR)
+// ==========================================
+nestClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const fullUrl = `${error.config?.baseURL || ""}${error.config?.url || ""}`;
+    const status = error.response?.status || "Network Error";
+    const msg = error.response?.data?.message || error.message;
 
-        if (!response.ok) {
-            const error = new Error(`HTTP ${response.status} ${response.statusText}`);
-            error.status = response.status;
-            error.data = data;
-            throw error;
-        }
+    console.error(
+      `[API NYASAR] ❌ HTTP ${status} di URL: ${fullUrl} | Pesan: ${msg}`,
+    );
+    return Promise.reject(error);
+  },
+);
 
-        return {
-            data,
-            status: response.status,
-        };
-    } catch (error) {
-        if (error?.name === 'AbortError') {
-            const timeoutError = new Error(`Request timeout after ${timeoutMs}ms`);
-            timeoutError.code = 'REQUEST_TIMEOUT';
-            throw timeoutError;
-        }
-        throw error;
-    } finally {
-        clearTimeout(timeoutId);
-    }
-};
-
-const get = async (path, options = {}) => request('GET', path, options);
-
-module.exports = {
-    get,
-};
+module.exports = nestClient;

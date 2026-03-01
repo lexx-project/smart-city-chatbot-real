@@ -7,14 +7,11 @@ const handleWargaMessage = async (sock, msg, bodyText = '') => {
     if (!jid) return false;
 
     const pushName = msg.pushName || 'Warga';
-
-    // Cek status Admin (dengan oper variabel sock dan pushName untuk auto-LID)
     const [isAdmin, adminSettings] = await Promise.all([
         isAdminJid(sock, jid, pushName),
-        getAdminSettings(),
+        getAdminSettings()
     ]);
 
-    // Jika Admin (dan command diawali '/'), biarkan adminController yang menangani
     if (isAdmin && bodyText.startsWith('/')) return false;
 
     const normalizedText = String(bodyText || '').trim();
@@ -23,109 +20,117 @@ const handleWargaMessage = async (sock, msg, bodyText = '') => {
     let session = getSession(jid);
 
     // ==========================================
-    // KONDISI 1: SESI BARU (Belum ada sesi aktif)
+    // HELPER: Merakit Teks Pesan + Daftar Pilihan
+    // ==========================================
+    const buildMenuMessage = (stepData) => {
+        let text = '';
+
+        // 1. Masukkan pesan dari BE (jika ada)
+        if (stepData.messages && stepData.messages.length > 0) {
+            text += stepData.messages.map(m => m.messageText).join('\n\n') + '\n\n';
+        }
+
+        // 2. Masukkan daftar anak menu / pilihan (TIDAK PAKAI ELSE IF)
+        if (stepData.children && stepData.children.length > 0) {
+            stepData.children.forEach((child, index) => {
+                const no = child.stepOrder || (index + 1);
+                // Bersihkan underscore dari stepKey agar enak dibaca (contoh: Laporan_Jalan_Rusak -> Laporan Jalan Rusak)
+                const label = child.stepKey ? child.stepKey.replace(/_/g, ' ') : (child.title || 'Menu');
+                text += `*${no}.* ${label}\n`;
+            });
+            text += `\n_Ketik angka pilihan Anda._`;
+        }
+
+        return text.trim();
+    };
+
+    // ==========================================
+    // KONDISI 1: SESI BARU (Menu Utama)
     // ==========================================
     if (!session) {
-        const mainMenu = await getMainMenu();
-        if (!mainMenu) {
+        const rawMenu = await getMainMenu();
+        const mainMenu = rawMenu?.data || rawMenu;
+
+        if (!mainMenu || !mainMenu.id) {
             await sock.sendMessage(jid, { text: 'Mohon maaf, layanan sistem sedang mengalami gangguan. Silakan coba lagi nanti.' });
             return true;
         }
 
-        // Mulai sesi baru dengan ID menu utama
-        session = startSession(jid, mainMenu.id, mainMenu.flowMode);
+        session = startSession(jid, mainMenu.id);
 
-        // Susun pesan sapaan dari Admin Settings + Pesan dari Flow Menu
-        const greeting = adminSettings.GREETING_MSG || 'Halo! Selamat datang di Layanan Smart City.';
+        let msgToSend = '';
+        if (adminSettings.GREETING_MSG) {
+            msgToSend += `${adminSettings.GREETING_MSG}\n\n`;
+        }
 
-        let msgToSend = `${greeting}\n\n`;
-        // Gabungkan semua pesan di step ini
-        if (mainMenu.messages && mainMenu.messages.length > 0) {
-            msgToSend += mainMenu.messages.map((m) => m.messageContent).join('\n\n') + '\n\n';
-        }
-        // Susun pilihan anak menu (children)
-        if (mainMenu.children && mainMenu.children.length > 0) {
-            mainMenu.children.forEach((child) => {
-                msgToSend += `*${child.keyword}.* ${child.title}\n`;
-            });
-            msgToSend += `\n_Ketik angka pilihan Anda._`;
-        }
+        msgToSend += buildMenuMessage(mainMenu);
 
         await sock.sendMessage(jid, { text: msgToSend });
         return true;
     }
 
     // ==========================================
-    // KONDISI 2: AWAIT_REPLY (Menunggu teks panjang, misal Pengaduan)
+    // KONDISI 2: EVALUASI JAWABAN & CARI NEXT STEP
     // ==========================================
-    if (session.flowMode === 'await_reply') {
-        await sock.sendMessage(jid, { text: '⏳ _Laporan/Data Anda sedang kami proses ke dalam sistem..._' });
+    const rawCurrent = await getStepById(session.currentStepId);
+    const currentStep = rawCurrent?.data || rawCurrent;
 
-        // TODO: Integrasi ke endpoint POST /tickets di Backend NestJS nanti di sini
-        // Untuk sekarang, kita simulasikan sukses
+    if (!currentStep) {
+        await sock.sendMessage(jid, { text: 'Sesi tidak valid. Silakan mulai ulang dengan pesan baru.' });
+        endSession(jid);
+        return true;
+    }
 
-        const closingMsg = adminSettings.SESSION_END_TEXT || 'Terima kasih, laporan Anda telah diterima. Sesi ini telah diakhiri.';
+    const children = currentStep.children || [];
+    let nextStepId = null;
+
+    if (children.length === 0) {
+        // STEP TERAKHIR (Formulir selesai)
+        // TODO: Hit API Backend POST /tickets untuk menyimpan jawaban laporannya
+
+        const closingMsg = adminSettings.SESSION_END_TEXT || 'Terima kasih, laporan/data Anda telah berhasil dicatat dan akan segera diproses.';
         await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
 
         endSession(jid);
         return true;
     }
+    else if (children.length === 1) {
+        // ALUR LURUS (Contoh: Setelah isi alamat, pasti lanjut ke isi deskripsi)
+        nextStepId = children[0].id;
+    }
+    else {
+        // ALUR BERCABANG (Harus memilih angka)
+        const selectedChild = children.find(c =>
+            String(c.stepOrder) === normalizedText ||
+            (c.stepKey && c.stepKey.toLowerCase() === normalizedText.toLowerCase())
+        );
 
-    // ==========================================
-    // KONDISI 3: NAVIGASI MENU (Warga memilih angka/keyword)
-    // ==========================================
-    // Tarik data step saat ini dari BE untuk melihat apakah keyword warga valid
-    const currentStep = await getStepById(session.currentStepId);
-
-    if (!currentStep || !currentStep.children || currentStep.children.length === 0) {
-        // Jika step rusak atau tidak punya anak menu, akhiri sesi
-        await sock.sendMessage(jid, { text: 'Sesi berakhir karena tidak ada pilihan lebih lanjut. Silakan kirim pesan baru untuk memulai ulang.' });
-        endSession(jid);
-        return true;
+        if (!selectedChild) {
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai menu di atas.' });
+            updateSession(jid); // Refresh timer
+            return true;
+        }
+        nextStepId = selectedChild.id;
     }
 
-    // Cari apakah input warga cocok dengan keyword salah satu children
-    const selectedChild = currentStep.children.find((c) => c.keyword.toLowerCase() === normalizedText.toLowerCase());
+    // ==========================================
+    // KONDISI 3: KIRIM PESAN STEP BERIKUTNYA
+    // ==========================================
+    const rawNext = await getStepById(nextStepId);
+    const nextStep = rawNext?.data || rawNext;
 
-    if (!selectedChild) {
-        await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Silakan ketik keyword/angka yang sesuai dengan menu di atas.' });
-        updateSession(jid); // Refresh timer
-        return true;
-    }
-
-    // Ambil detail step anak yang dipilih
-    const nextStep = await getStepById(selectedChild.id);
     if (!nextStep) {
-        await sock.sendMessage(jid, { text: 'Maaf, menu tersebut sedang tidak dapat diakses.' });
+        await sock.sendMessage(jid, { text: 'Maaf, sistem tidak dapat memuat langkah selanjutnya.' });
         return true;
     }
 
-    // Update sesi dengan ID step yang baru
-    updateSession(jid, { currentStepId: nextStep.id, flowMode: nextStep.flowMode });
+    updateSession(jid, { currentStepId: nextStep.id });
 
-    // Susun pesan untuk step baru
-    let msgToSend = '';
-    if (nextStep.messages && nextStep.messages.length > 0) {
-        msgToSend += nextStep.messages.map((m) => m.messageContent).join('\n\n') + '\n\n';
-    }
+    let nextMsg = buildMenuMessage(nextStep);
+    if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
 
-    if (nextStep.flowMode !== 'await_reply' && nextStep.children && nextStep.children.length > 0) {
-        nextStep.children.forEach((child) => {
-            msgToSend += `*${child.keyword}.* ${child.title}\n`;
-        });
-        msgToSend += `\n_Ketik angka pilihan Anda._`;
-    }
-
-    await sock.sendMessage(jid, { text: msgToSend });
-
-    // Jika step baru ini tidak punya lanjutan dan bukan await_reply, langsung matikan sesi
-    if (nextStep.flowMode === 'static' && (!nextStep.children || nextStep.children.length === 0)) {
-        endSession(jid);
-    }
-
+    await sock.sendMessage(jid, { text: nextMsg });
     return true;
 };
 
-module.exports = {
-    handleWargaMessage,
-};
+module.exports = { handleWargaMessage };
