@@ -1,0 +1,13 @@
+{
+  "watch": ["app.js", "src"],
+  "ext": "js",
+  "ignore": ["node_modules", "session", "*.log", "src/config/*.json"],
+  "exec": "node app.js",
+  "delay": "300",
+  "events": {
+    "start": "echo '\u001b[36m[NODEMON]\u001b[0m \u001b[32mServer started (watch mode aktif)\u001b[0m'",
+    "restart": "echo '\u001b[36m[NODEMON]\u001b[0m \u001b[33mPerubahan terdeteksi -> server di-reload\u001b[0m'",
+    "crash": "echo '\u001b[36m[NODEMON]\u001b[0m \u001b[31mServer crash -> menunggu perubahan file\u001b[0m'",
+    "quit": "echo '\u001b[36m[NODEMON]\u001b[0m \u001b[35mWatch mode berhenti\u001b[0m'"
+  }
+}

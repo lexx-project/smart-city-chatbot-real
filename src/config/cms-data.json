@@ -1,0 +1,80 @@
+{
+  "adminJids": [],
+  "greetingMessage": "Halo Warga. Selamat datang di Smart Public Service. Kami siap membantu kebutuhan layanan publik Anda.",
+  "timeoutText": "Terima kasih telah menghubungi kami. Sesi Anda telah berakhir karena tidak ada aktivitas. Silakan kirim pesan lagi untuk memulai sesi baru.",
+  "sessionEndText": "Terima kasih sudah menggunakan layanan Smart Public Service. Sampai jumpa.",
+  "mainMenu": [
+    {
+      "id": "menu_kependudukan",
+      "header": "Dukcapil",
+      "title": "Layanan Kependudukan",
+      "description": "KTP, KK, akta kelahiran, dan pindah domisili",
+      "enabled": true
+    },
+    {
+      "id": "menu_perizinan",
+      "header": "Perizinan",
+      "title": "Layanan Perizinan",
+      "description": "Informasi dan pengajuan izin usaha/non-usaha",
+      "enabled": true
+    },
+    {
+      "id": "menu_pengaduan",
+      "header": "Pengaduan",
+      "title": "Pengaduan Masyarakat",
+      "description": "Sampaikan laporan kendala layanan publik",
+      "enabled": true
+    }
+  ],
+  "subMenus": {
+    "menu_kependudukan": {
+      "text": "Layanan Kependudukan: pilih kebutuhan Anda.",
+      "title": "Sub Menu Kependudukan",
+      "buttonText": "Pilih Layanan Dukcapil",
+      "nextMenu": [
+        {
+          "id": "dukcapil_ktp",
+          "header": "Dukcapil",
+          "title": "Pembuatan / Pembaruan KTP",
+          "description": "Syarat dan alur pengajuan KTP"
+        },
+        {
+          "id": "dukcapil_kk",
+          "header": "Dukcapil",
+          "title": "Pembuatan / Pembaruan KK",
+          "description": "Syarat dan alur pengajuan KK"
+        }
+      ]
+    },
+    "menu_perizinan": {
+      "text": "Layanan Perizinan: pilih jenis izin yang Anda butuhkan.",
+      "title": "Sub Menu Perizinan",
+      "buttonText": "Pilih Jenis Izin",
+      "nextMenu": [
+        {
+          "id": "izin_usaha",
+          "header": "Perizinan",
+          "title": "Izin Usaha",
+          "description": "Panduan pengajuan izin usaha"
+        },
+        {
+          "id": "izin_non_usaha",
+          "header": "Perizinan",
+          "title": "Izin Non-Usaha",
+          "description": "Panduan pengajuan izin non-usaha"
+        }
+      ]
+    },
+    "menu_pengaduan": {
+      "text": "Silakan kirim pengaduan dengan format: NIK#Nama#Alamat#Isi Pengaduan. Tim kami akan menindaklanjuti.",
+      "flowMode": "await_reply",
+      "awaitTimeoutSeconds": 180,
+      "successReply": "TERIMA KASIH, PERMINTAAN ANDA SUDAH KAMI PROSES"
+    },
+    "dukcapil_ktp": "Syarat KTP: KK terbaru, surat pengantar RT/RW, dan foto 3x4. Kunjungi loket Dukcapil Senin-Jumat pukul 08.00-15.00.",
+    "dukcapil_kk": "Syarat KK: formulir F-1.01, buku nikah/akta, dan dokumen pendukung perubahan data.",
+    "izin_usaha": "Untuk izin usaha, siapkan NIB, NPWP, dan dokumen lokasi usaha. Petugas akan menghubungi Anda maksimal 1x24 jam.",
+    "izin_non_usaha": "Untuk izin non-usaha, kirim jenis kegiatan, lokasi, tanggal pelaksanaan, dan kontak PIC."
+  },
+  "timeoutSeconds": 10
+}

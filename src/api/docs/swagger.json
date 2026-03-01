@@ -1,0 +1,433 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Smart City Chatbot API",
+    "version": "1.0.0",
+    "description": "REST API backend for Smart Public Service WhatsApp Bot dashboard"
+  },
+  "servers": [
+    { "url": "/" }
+  ],
+  "tags": [
+    { "name": "Health" },
+    { "name": "CMS" },
+    { "name": "Analytics" },
+    { "name": "Admin" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "API health check",
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/api/cms": {
+      "get": {
+        "tags": ["CMS"],
+        "summary": "Get CMS JSON",
+        "responses": {
+          "200": {
+            "description": "CMS data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CmsResponse" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["CMS"],
+        "summary": "Overwrite CMS JSON",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CmsData" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "CMS updated" },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/api/cms/overwrite": {
+      "post": {
+        "tags": ["CMS"],
+        "summary": "Overwrite CMS JSON (POST)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CmsData" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "CMS updated" }
+        }
+      }
+    },
+    "/api/analytics/realtime": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Get realtime analytics",
+        "responses": {
+          "200": {
+            "description": "Realtime analytics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RealtimeAnalyticsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/analytics/summary": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Get analytics summary by range",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["1d", "7d", "30d", "1y"],
+              "default": "7d"
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Summary" },
+          "400": { "description": "Invalid range" }
+        }
+      }
+    },
+    "/api/admin/commands": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "List available admin commands",
+        "responses": { "200": { "description": "Commands list" } }
+      }
+    },
+    "/api/admin/admins": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "List admins",
+        "responses": { "200": { "description": "Admins list" } }
+      },
+      "post": {
+        "tags": ["Admin"],
+        "summary": "Add admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": { "type": "string", "example": "6281234567890" }
+                },
+                "required": ["phone"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Admin added" },
+          "400": { "description": "Invalid phone" }
+        }
+      }
+    },
+    "/api/admin/admins/{phone}": {
+      "delete": {
+        "tags": ["Admin"],
+        "summary": "Delete admin",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Deleted" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/api/admin/settings": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "Get settings overview",
+        "responses": { "200": { "description": "Settings" } }
+      }
+    },
+    "/api/admin/settings/session-end-text": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update session end text",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"] }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/settings/timeout-text": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update timeout text",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"] }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/settings/timeout-seconds": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update global timeout seconds",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "value": { "type": "integer", "minimum": 10, "maximum": 3600 } }, "required": ["value"] }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/main-menu/{menuId}/enabled": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Enable/disable main menu",
+        "parameters": [
+          {
+            "name": "menuId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "enabled": { "type": "boolean" } }, "required": ["enabled"] }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/main-menu/reorder": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Reorder main menu by id",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "order": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["order"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Reordered" } }
+      }
+    },
+    "/api/admin/submenus/{subMenuId}/flow-mode": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update submenu flow mode",
+        "parameters": [
+          {
+            "name": "subMenuId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": { "type": "string", "enum": ["close", "await_reply"] }
+                },
+                "required": ["mode"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/submenus/{subMenuId}/await-timeout": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update submenu await timeout",
+        "parameters": [
+          {
+            "name": "subMenuId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "seconds": { "type": "integer", "minimum": 30, "maximum": 3600 }
+                },
+                "required": ["seconds"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/submenus/{subMenuId}/success-reply": {
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update submenu success reply",
+        "parameters": [
+          {
+            "name": "subMenuId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string" }
+                },
+                "required": ["message"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/api/admin/sessions/{sessionKey}": {
+      "delete": {
+        "tags": ["Admin"],
+        "summary": "Reset active session by session key",
+        "parameters": [
+          {
+            "name": "sessionKey",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "Session reset" } }
+      }
+    },
+    "/api/admin/stats/{metric}": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "Get admin stats (totalchat/totalsesi)",
+        "parameters": [
+          {
+            "name": "metric",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "enum": ["totalchat", "totalsesi"] }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["1d", "7d", "30d", "1y"], "default": "7d" }
+          }
+        ],
+        "responses": { "200": { "description": "Stats result" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "MainMenuItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "header": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "enabled": { "type": "boolean" }
+        }
+      },
+      "CmsData": {
+        "type": "object",
+        "properties": {
+          "adminJids": { "type": "array", "items": { "type": "string" } },
+          "greetingMessage": { "type": "string" },
+          "timeoutText": { "type": "string" },
+          "sessionEndText": { "type": "string" },
+          "mainMenu": { "type": "array", "items": { "$ref": "#/components/schemas/MainMenuItem" } },
+          "subMenus": { "type": "object", "additionalProperties": true },
+          "timeoutSeconds": { "type": "integer" }
+        },
+        "required": ["greetingMessage", "mainMenu", "subMenus", "timeoutSeconds"]
+      },
+      "CmsResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": { "$ref": "#/components/schemas/CmsData" }
+        }
+      },
+      "RealtimeAnalyticsResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "activeSessions": { "type": "integer" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
