@@ -1,183 +1,131 @@
-const {
-    loadCmsData,
-    getEnabledMainMenu,
-    getTimeoutSeconds,
-    getTimeoutText,
-    getSessionEndText,
-    resolveMenuNode,
-    FLOW_MODE,
-} = require('../services/cmsService');
-const { isAdminJid } = require('../services/adminService');
-const { recordWargaChat, recordWargaSessionStart } = require('../services/analyticsService');
-const {
-    sessions,
-    registerAliasesForJid,
-    resolveSessionContext,
-    createSession,
-    deleteSession,
-    scheduleSessionTimeout,
-} = require('../services/wargaSessionService');
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const sendTextMenu = async (sock, jid, textBlock, menuArray, session) => {
-    let message = `${textBlock}\n\n`;
-    const optionsMap = {};
-
-    menuArray.forEach((item, index) => {
-        const num = String(index + 1);
-        message += `*${num}.* ${item.title}\n`;
-        optionsMap[num] = item.id;
-    });
-
-    message += '\n👉 *Balas dengan angka (contoh: 1) untuk memilih.*';
-    session.currentOptions = optionsMap;
-
-    await sock.sendMessage(jid, { text: message });
-};
-
-const endSession = async (sock, sessionKey, replyJid, sendTimeoutMessage = false, cmsData = null) => {
-    deleteSession(sessionKey);
-
-    if (sendTimeoutMessage) {
-        await sock.sendMessage(replyJid, { text: getTimeoutText(cmsData) });
-    }
-};
-
-const refreshSessionTimeout = (sock, sessionKey, jid, session, defaultTimeoutSeconds, cmsData) => {
-    const timeoutSeconds = Number(session.timeoutSeconds) > 0 ? Number(session.timeoutSeconds) : defaultTimeoutSeconds;
-
-    scheduleSessionTimeout(sessionKey, timeoutSeconds, async () => {
-        try {
-            await endSession(sock, sessionKey, jid, true, cmsData);
-        } catch (error) {
-            console.error('[WARGA_TIMEOUT_ERROR]', error);
-        }
-    });
-};
-
-const sendGreetingAndMainMenu = async (sock, msg, cmsData, session) => {
-    const jid = msg?.key?.remoteJid;
-    if (!jid) return;
-
-    const enabledMainMenu = getEnabledMainMenu(cmsData);
-    if (!enabledMainMenu.length) {
-        await sock.sendMessage(jid, {
-            text: 'Menu layanan belum dikonfigurasi. Silakan hubungi admin.',
-        });
-        return;
-    }
-
-    const greetingText = cmsData.greetingMessage ? `${cmsData.greetingMessage}\n\n` : '';
-    const mainText = `${greetingText}Silakan pilih layanan yang Anda butuhkan:`;
-
-    await sendTextMenu(sock, jid, mainText, enabledMainMenu, session);
-};
-
-const processWargaInput = async (sock, msg, text, cmsData, session, sessionKey) => {
-    const jid = msg?.key?.remoteJid;
-    if (!jid) return { endSessionNow: false };
-
-    if (session.awaitingTextFor) {
-        const successReply = session.awaitingTextFor.successReply || 'Berhasil. Data Anda sudah kami terima.';
-        await sock.sendMessage(jid, { text: successReply });
-        session.awaitingTextFor = null;
-        session.timeoutSeconds = getTimeoutSeconds(cmsData);
-        await wait(2000);
-        await sock.sendMessage(jid, { text: getSessionEndText(cmsData) });
-        await endSession(sock, sessionKey, jid, false, cmsData);
-        return { endSessionNow: true };
-    }
-
-    const hasPendingOptions = !!session.currentOptions;
-
-    if (hasPendingOptions && !session.currentOptions[text]) {
-        await sock.sendMessage(jid, {
-            text: '❌ Pilihan tidak valid. Silakan balas dengan angka yang tersedia pada menu.',
-        });
-        return { endSessionNow: false };
-    }
-
-    const inputId = hasPendingOptions ? session.currentOptions[text] : text;
-    const node = resolveMenuNode(cmsData, inputId);
-
-    if (!node) {
-        await sock.sendMessage(jid, {
-            text: '❌ Pilihan tidak valid. Silakan pilih layanan yang tersedia.',
-        });
-        return { endSessionNow: false };
-    }
-
-    if (node.kind === 'menu') {
-        await sendTextMenu(sock, jid, node.text, node.nextMenu, session);
-        return { endSessionNow: false };
-    }
-
-    session.currentOptions = null;
-    await sock.sendMessage(jid, { text: node.text });
-
-    if (node.flowMode === FLOW_MODE.AWAIT_REPLY) {
-        session.awaitingTextFor = {
-            menuId: inputId,
-            successReply: node.successReply,
-        };
-        session.timeoutSeconds = node.awaitTimeoutSeconds;
-        return { endSessionNow: false };
-    }
-
-    await wait(2000);
-    await sock.sendMessage(jid, { text: getSessionEndText(cmsData) });
-    await endSession(sock, sessionKey, jid, false, cmsData);
-    return { endSessionNow: true };
-};
+const { getSession, startSession, updateSession, endSession } = require('../services/wargaSessionService');
+const { getAdminSettings, isAdminJid } = require('../services/adminService');
+const { getMainMenu, getStepById } = require('../services/botFlowService');
 
 const handleWargaMessage = async (sock, msg, bodyText = '') => {
-    const jid = msg.key.remoteJid;
-    if (!jid) return;
+    const jid = msg?.key?.remoteJid;
+    if (!jid) return false;
 
-    const text = (bodyText || '').trim();
-    const normalizedText = text.toLowerCase();
-    if (!text) return;
+    const pushName = msg.pushName || 'Warga';
 
-    if (normalizedText === '/setting') {
-        await sock.sendMessage(jid, {
-            text: 'Akses ditolak. Fitur /setting hanya untuk admin.',
-        });
-        return;
-    }
+    // Cek status Admin (dengan oper variabel sock dan pushName untuk auto-LID)
+    const [isAdmin, adminSettings] = await Promise.all([
+        isAdminJid(sock, jid, pushName),
+        getAdminSettings(),
+    ]);
 
-    const cmsData = await loadCmsData();
-    const isAdmin = await isAdminJid(jid, cmsData);
-    const timeoutSeconds = getTimeoutSeconds(cmsData);
-    if (!isAdmin) {
-        await recordWargaChat();
-    }
+    // Jika Admin (dan command diawali '/'), biarkan adminController yang menangani
+    if (isAdmin && bodyText.startsWith('/')) return false;
 
-    const sessionContext = await resolveSessionContext(jid);
-    let { sessionKey, session } = sessionContext;
+    const normalizedText = String(bodyText || '').trim();
+    if (!normalizedText) return;
 
+    let session = getSession(jid);
+
+    // ==========================================
+    // KONDISI 1: SESI BARU (Belum ada sesi aktif)
+    // ==========================================
     if (!session) {
-        session = createSession(sessionKey, timeoutSeconds);
-        session.awaitingTextFor = null;
-        registerAliasesForJid(sessionKey, jid, session);
-        if (!isAdmin) {
-            await recordWargaSessionStart();
+        const mainMenu = await getMainMenu();
+        if (!mainMenu) {
+            await sock.sendMessage(jid, { text: 'Mohon maaf, layanan sistem sedang mengalami gangguan. Silakan coba lagi nanti.' });
+            return true;
         }
 
-        await sendGreetingAndMainMenu(sock, msg, cmsData, session);
-        refreshSessionTimeout(sock, sessionKey, jid, session, timeoutSeconds, cmsData);
-        return;
+        // Mulai sesi baru dengan ID menu utama
+        session = startSession(jid, mainMenu.id, mainMenu.flowMode);
+
+        // Susun pesan sapaan dari Admin Settings + Pesan dari Flow Menu
+        const greeting = adminSettings.GREETING_MSG || 'Halo! Selamat datang di Layanan Smart City.';
+
+        let msgToSend = `${greeting}\n\n`;
+        // Gabungkan semua pesan di step ini
+        if (mainMenu.messages && mainMenu.messages.length > 0) {
+            msgToSend += mainMenu.messages.map((m) => m.messageContent).join('\n\n') + '\n\n';
+        }
+        // Susun pilihan anak menu (children)
+        if (mainMenu.children && mainMenu.children.length > 0) {
+            mainMenu.children.forEach((child) => {
+                msgToSend += `*${child.keyword}.* ${child.title}\n`;
+            });
+            msgToSend += `\n_Ketik angka pilihan Anda._`;
+        }
+
+        await sock.sendMessage(jid, { text: msgToSend });
+        return true;
     }
 
-    registerAliasesForJid(sessionKey, jid, session);
+    // ==========================================
+    // KONDISI 2: AWAIT_REPLY (Menunggu teks panjang, misal Pengaduan)
+    // ==========================================
+    if (session.flowMode === 'await_reply') {
+        await sock.sendMessage(jid, { text: '⏳ _Laporan/Data Anda sedang kami proses ke dalam sistem..._' });
 
-    const result = await processWargaInput(sock, msg, text, cmsData, session, sessionKey);
-    if (result?.endSessionNow) return;
+        // TODO: Integrasi ke endpoint POST /tickets di Backend NestJS nanti di sini
+        // Untuk sekarang, kita simulasikan sukses
 
-    refreshSessionTimeout(sock, sessionKey, jid, session, timeoutSeconds, cmsData);
+        const closingMsg = adminSettings.SESSION_END_TEXT || 'Terima kasih, laporan Anda telah diterima. Sesi ini telah diakhiri.';
+        await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
+
+        endSession(jid);
+        return true;
+    }
+
+    // ==========================================
+    // KONDISI 3: NAVIGASI MENU (Warga memilih angka/keyword)
+    // ==========================================
+    // Tarik data step saat ini dari BE untuk melihat apakah keyword warga valid
+    const currentStep = await getStepById(session.currentStepId);
+
+    if (!currentStep || !currentStep.children || currentStep.children.length === 0) {
+        // Jika step rusak atau tidak punya anak menu, akhiri sesi
+        await sock.sendMessage(jid, { text: 'Sesi berakhir karena tidak ada pilihan lebih lanjut. Silakan kirim pesan baru untuk memulai ulang.' });
+        endSession(jid);
+        return true;
+    }
+
+    // Cari apakah input warga cocok dengan keyword salah satu children
+    const selectedChild = currentStep.children.find((c) => c.keyword.toLowerCase() === normalizedText.toLowerCase());
+
+    if (!selectedChild) {
+        await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Silakan ketik keyword/angka yang sesuai dengan menu di atas.' });
+        updateSession(jid); // Refresh timer
+        return true;
+    }
+
+    // Ambil detail step anak yang dipilih
+    const nextStep = await getStepById(selectedChild.id);
+    if (!nextStep) {
+        await sock.sendMessage(jid, { text: 'Maaf, menu tersebut sedang tidak dapat diakses.' });
+        return true;
+    }
+
+    // Update sesi dengan ID step yang baru
+    updateSession(jid, { currentStepId: nextStep.id, flowMode: nextStep.flowMode });
+
+    // Susun pesan untuk step baru
+    let msgToSend = '';
+    if (nextStep.messages && nextStep.messages.length > 0) {
+        msgToSend += nextStep.messages.map((m) => m.messageContent).join('\n\n') + '\n\n';
+    }
+
+    if (nextStep.flowMode !== 'await_reply' && nextStep.children && nextStep.children.length > 0) {
+        nextStep.children.forEach((child) => {
+            msgToSend += `*${child.keyword}.* ${child.title}\n`;
+        });
+        msgToSend += `\n_Ketik angka pilihan Anda._`;
+    }
+
+    await sock.sendMessage(jid, { text: msgToSend });
+
+    // Jika step baru ini tidak punya lanjutan dan bukan await_reply, langsung matikan sesi
+    if (nextStep.flowMode === 'static' && (!nextStep.children || nextStep.children.length === 0)) {
+        endSession(jid);
+    }
+
+    return true;
 };
 
 module.exports = {
     handleWargaMessage,
-    sessions,
 };
