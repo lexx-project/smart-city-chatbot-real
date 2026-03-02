@@ -5,6 +5,7 @@ const { jidLocal, resolveLidFromPhone, resolvePhoneFromLid, buildActorTokens } =
 const runtimeAdminOverrides = new Set();
 
 const extractDigits = (value = '') => String(value || '').replace(/\D/g, '');
+const extractPhoneDigits = (jid = '') => extractDigits(String(jid || '').split('@')[0] || '');
 
 const toWhatsappJid = (value = '') => {
     const raw = String(value || '').trim();
@@ -141,6 +142,7 @@ const isAdminJid = async (sock, jid, pushName) => {
 module.exports = {
     getAdminSettings,
     isAdminJid,
+    extractPhoneDigits,
     addAdminJid,
     listAdminJids,
     removeAdminJid,

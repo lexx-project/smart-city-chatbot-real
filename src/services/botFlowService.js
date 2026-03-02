@@ -5,7 +5,6 @@ const getMainMenu = async () => {
         const response = await nestClient.get('/bot-flow/menu');
         return response.data;
     } catch (error) {
-        console.error('[BOT_FLOW_ERROR] Gagal mengambil menu utama:', error?.message);
         return null;
     }
 };
@@ -15,12 +14,19 @@ const getStepById = async (stepId) => {
         const response = await nestClient.get(`/bot-flow/step/${stepId}`);
         return response.data;
     } catch (error) {
-        console.error(`[BOT_FLOW_ERROR] Gagal mengambil step ${stepId}:`, error?.message);
         return null;
     }
 };
 
-module.exports = {
-    getMainMenu,
-    getStepById,
+const submitTicket = async (payload) => {
+    try {
+        // Tembak ke endpoint tiket (sesuaikan dengan controller tiket di BE)
+        const response = await nestClient.post('/tickets', payload);
+        return response.data;
+    } catch (error) {
+        console.error('[TICKET_SUBMIT_ERROR]', error?.response?.data || error.message);
+        return null;
+    }
 };
+
+module.exports = { getMainMenu, getStepById, submitTicket };

@@ -1,6 +1,51 @@
 const { getSession, startSession, updateSession, endSession } = require('../services/wargaSessionService');
-const { getAdminSettings, isAdminJid } = require('../services/adminService');
-const { getMainMenu, getStepById } = require('../services/botFlowService');
+const { getAdminSettings, isAdminJid, extractPhoneDigits } = require('../services/adminService');
+const { getMainMenu, getStepById, submitTicket } = require('../services/botFlowService');
+
+// Validator Engine
+const validateInput = (text, inputType, rule) => {
+    if (!text) return 'Jawaban tidak boleh kosong.';
+
+    if (inputType === 'number') {
+        if (!/^\d+$/.test(text)) return '⚠️ Format salah. Jawaban WAJIB berupa angka penuh tanpa huruf/simbol.';
+    }
+
+    if (rule) {
+        if (rule.startsWith('min:')) {
+            const min = parseInt(rule.split(':')[1]);
+            if (text.length < min) return `⚠️ Jawaban terlalu pendek. Minimal ${min} karakter.`;
+        }
+        if (rule.startsWith('regex:')) {
+            try {
+                // Ekstrak pola regex (misal dari "regex:/^[0-9]{16}$/" menjadi "^[0-9]{16}$")
+                let pattern = rule.replace('regex:', '');
+                if (pattern.startsWith('/')) pattern = pattern.slice(1, -1);
+
+                const regex = new RegExp(pattern);
+                if (!regex.test(text)) return '⚠️ Format jawaban tidak sesuai dengan ketentuan sistem.';
+            } catch (e) {
+                console.error('[REGEX_ERROR]', e);
+            }
+        }
+    }
+    return null; // Lolos validasi
+};
+
+const buildMenuMessage = (stepData) => {
+    let text = '';
+    if (stepData.messages && stepData.messages.length > 0) {
+        text += stepData.messages.map(m => m.messageText).join('\n\n') + '\n\n';
+    }
+    if (stepData.children && stepData.children.length > 0) {
+        stepData.children.forEach((child, index) => {
+            const no = child.stepOrder || (index + 1);
+            const label = child.stepKey ? child.stepKey.replace(/_/g, ' ') : child.title;
+            text += `*${no}.* ${label}\n`;
+        });
+        text += `\n_Ketik angka pilihan Anda._`;
+    }
+    return text.trim();
+};
 
 const handleWargaMessage = async (sock, msg, bodyText = '') => {
     const jid = msg?.key?.remoteJid;
@@ -19,64 +64,31 @@ const handleWargaMessage = async (sock, msg, bodyText = '') => {
 
     let session = getSession(jid);
 
-    // ==========================================
-    // HELPER: Merakit Teks Pesan + Daftar Pilihan
-    // ==========================================
-    const buildMenuMessage = (stepData) => {
-        let text = '';
-
-        // 1. Masukkan pesan dari BE (jika ada)
-        if (stepData.messages && stepData.messages.length > 0) {
-            text += stepData.messages.map(m => m.messageText).join('\n\n') + '\n\n';
-        }
-
-        // 2. Masukkan daftar anak menu / pilihan (TIDAK PAKAI ELSE IF)
-        if (stepData.children && stepData.children.length > 0) {
-            stepData.children.forEach((child, index) => {
-                const no = child.stepOrder || (index + 1);
-                // Bersihkan underscore dari stepKey agar enak dibaca (contoh: Laporan_Jalan_Rusak -> Laporan Jalan Rusak)
-                const label = child.stepKey ? child.stepKey.replace(/_/g, ' ') : (child.title || 'Menu');
-                text += `*${no}.* ${label}\n`;
-            });
-            text += `\n_Ketik angka pilihan Anda._`;
-        }
-
-        return text.trim();
-    };
-
-    // ==========================================
-    // KONDISI 1: SESI BARU (Menu Utama)
-    // ==========================================
+    // KONDISI 1: SESI BARU
     if (!session) {
         const rawMenu = await getMainMenu();
         const mainMenu = rawMenu?.data || rawMenu;
 
         if (!mainMenu || !mainMenu.id) {
-            await sock.sendMessage(jid, { text: 'Mohon maaf, layanan sistem sedang mengalami gangguan. Silakan coba lagi nanti.' });
+            await sock.sendMessage(jid, { text: 'Mohon maaf, layanan sistem sedang mengalami gangguan.' });
             return true;
         }
 
         session = startSession(jid, mainMenu.id);
 
-        let msgToSend = '';
-        if (adminSettings.GREETING_MSG) {
-            msgToSend += `${adminSettings.GREETING_MSG}\n\n`;
-        }
-
+        let msgToSend = adminSettings.GREETING_MSG ? `${adminSettings.GREETING_MSG}\n\n` : '';
         msgToSend += buildMenuMessage(mainMenu);
 
         await sock.sendMessage(jid, { text: msgToSend });
         return true;
     }
 
-    // ==========================================
-    // KONDISI 2: EVALUASI JAWABAN & CARI NEXT STEP
-    // ==========================================
+    // KONDISI 2: VALIDASI INPUT & SIMPAN DATA JAWABAN
     const rawCurrent = await getStepById(session.currentStepId);
     const currentStep = rawCurrent?.data || rawCurrent;
 
     if (!currentStep) {
-        await sock.sendMessage(jid, { text: 'Sesi tidak valid. Silakan mulai ulang dengan pesan baru.' });
+        await sock.sendMessage(jid, { text: 'Sesi tidak valid. Silakan mulai ulang.' });
         endSession(jid);
         return true;
     }
@@ -84,47 +96,81 @@ const handleWargaMessage = async (sock, msg, bodyText = '') => {
     const children = currentStep.children || [];
     let nextStepId = null;
 
-    if (children.length === 0) {
-        // STEP TERAKHIR (Formulir selesai)
-        // TODO: Hit API Backend POST /tickets untuk menyimpan jawaban laporannya
+    // Jika ini bukan menu utama, lakukan validasi
+    if (currentStep.id !== 'root_menu' && currentStep.stepKey !== 'main_menu') {
+        const isSelectMode = children.length > 1; // Jika pilihan ganda, inputType otomatis select
 
-        const closingMsg = adminSettings.SESSION_END_TEXT || 'Terima kasih, laporan/data Anda telah berhasil dicatat dan akan segera diproses.';
+        if (!isSelectMode) {
+            // Validasi Input Teks / Angka
+            const errorMsg = validateInput(normalizedText, currentStep.inputType, currentStep.validationRule);
+            if (errorMsg) {
+                await sock.sendMessage(jid, { text: errorMsg });
+                updateSession(jid); // Refresh timer
+                return true;
+            }
+            // Simpan jawaban ke memori
+            session.answers[currentStep.stepKey] = normalizedText;
+        }
+    }
+
+    // TENTUKAN LANGKAH BERIKUTNYA
+    if (children.length === 0) {
+        // STEP TERAKHIR: Kirim Data ke BE
+        await sock.sendMessage(jid, { text: '⏳ _Laporan/Data Anda sedang kami proses..._' });
+
+        const ticketPayload = {
+            reporterPhone: extractPhoneDigits(jid),
+            reporterName: pushName,
+            source: 'whatsapp',
+            // Simpan flowId jika ada
+            flowId: currentStep.flowId || null,
+            // Konversi jawaban menjadi format JSON string untuk deskripsi
+            description: JSON.stringify(session.answers, null, 2)
+        };
+
+        // Fire and forget ke Backend
+        await submitTicket(ticketPayload);
+
+        const closingMsg = adminSettings.SESSION_END_TEXT || 'Terima kasih, laporan/data Anda telah berhasil dicatat ke dalam sistem.';
         await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
 
         endSession(jid);
         return true;
     }
     else if (children.length === 1) {
-        // ALUR LURUS (Contoh: Setelah isi alamat, pasti lanjut ke isi deskripsi)
         nextStepId = children[0].id;
     }
     else {
-        // ALUR BERCABANG (Harus memilih angka)
+        // PILIHAN GANDA (Menu)
         const selectedChild = children.find(c =>
             String(c.stepOrder) === normalizedText ||
             (c.stepKey && c.stepKey.toLowerCase() === normalizedText.toLowerCase())
         );
 
         if (!selectedChild) {
-            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai menu di atas.' });
-            updateSession(jid); // Refresh timer
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai.' });
+            updateSession(jid);
             return true;
         }
+
+        // Simpan data pilihan jika diperlukan
+        if (currentStep.stepKey && currentStep.stepKey !== 'main_menu') {
+            session.answers[currentStep.stepKey] = selectedChild.stepKey || normalizedText;
+        }
+
         nextStepId = selectedChild.id;
     }
 
-    // ==========================================
-    // KONDISI 3: KIRIM PESAN STEP BERIKUTNYA
-    // ==========================================
+    // KONDISI 3: KIRIM STEP SELANJUTNYA
     const rawNext = await getStepById(nextStepId);
     const nextStep = rawNext?.data || rawNext;
 
     if (!nextStep) {
-        await sock.sendMessage(jid, { text: 'Maaf, sistem tidak dapat memuat langkah selanjutnya.' });
-        return true;
+         await sock.sendMessage(jid, { text: 'Maaf, sistem tidak dapat memuat langkah selanjutnya.' });
+         return true;
     }
 
-    updateSession(jid, { currentStepId: nextStep.id });
+    updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
 
     let nextMsg = buildMenuMessage(nextStep);
     if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
