@@ -54,15 +54,39 @@ const getAdminSettings = async () => {
     }
 };
 
+// ═══════════════════════════════════════════════════════
+//  ADMIN LIST CACHING — Hindari API call setiap pesan
+//  Cache selama 5 menit, fallback ke cache terakhir jika API gagal
+// ═══════════════════════════════════════════════════════
+let cachedAdminList = [];
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit
+
 const getBotAdmins = async () => {
+    const now = Date.now();
+
+    // Gunakan cache jika masih valid
+    if (cachedAdminList.length > 0 && (now - cacheTimestamp) < CACHE_TTL_MS) {
+        return cachedAdminList;
+    }
+
     try {
         const response = await nestClient.get('/bot-admins');
         const payload = response?.data;
         const rows = Array.isArray(payload) ? payload : [];
-        return rows.map(extractAdminCandidate).filter(Boolean);
+        const result = rows.map(extractAdminCandidate).filter(Boolean);
+
+        // Update cache hanya jika berhasil
+        if (result.length > 0) {
+            cachedAdminList = result;
+            cacheTimestamp = now;
+        }
+
+        return result.length > 0 ? result : cachedAdminList;
     } catch (error) {
-        console.error('[BOT_ADMINS_ERROR] Gagal mengambil daftar admin:', error?.message);
-        return [];
+        console.error('[BOT_ADMINS_ERROR] Gagal mengambil daftar admin, gunakan cache:', error?.message);
+        // FALLBACK: gunakan cache terakhir yang berhasil, BUKAN array kosong
+        return cachedAdminList;
     }
 };
 

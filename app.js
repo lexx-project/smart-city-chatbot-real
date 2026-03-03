@@ -65,6 +65,8 @@ const startBot = async () => {
         });
 
         currentSock = sock;
+        // Bersihkan listener lama untuk mencegah duplicate handling saat reconnect
+        sock.ev.removeAllListeners('messages.upsert');
         registerRoutes(sock);
         sock.ev.on('creds.update', saveCreds);
 

@@ -14,6 +14,7 @@ const {
   getStepById,
   submitTicket,
 } = require("../services/botFlowService");
+const { getAdminSession } = require("../services/adminSessionService");
 
 // Validator Engine
 const validateInput = (text, inputType, rule) => {
@@ -69,6 +70,14 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   const jid = msg?.key?.remoteJid;
   if (!jid) return false;
 
+  // ═══════════════════════════════════════════════════════
+  //  INDEPENDENT GUARD: Cek admin session TANPA isAdminJid()
+  //  Ini tidak bergantung pada API /bot-admins yang bisa gagal
+  // ═══════════════════════════════════════════════════════
+  if (getAdminSession(jid)) {
+    return false; // Admin sedang dalam wizard, JANGAN proses
+  }
+
   const pushName = msg.pushName || "Warga";
   const [isAdmin, adminSettings] = await Promise.all([
     isAdminJid(sock, jid, pushName),
@@ -76,7 +85,6 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   ]);
 
   // Admin TIDAK boleh diproses oleh wargaController sama sekali
-  // Semua pesan admin harus ditangani oleh adminController
   if (isAdmin) return false;
 
   const normalizedText = String(bodyText || "").trim();
@@ -90,6 +98,8 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     const mainMenu = rawMenu?.data || rawMenu;
 
     if (!mainMenu || !mainMenu.id) {
+      // SAFETY: Jangan kirim pesan error ke admin
+      if (isAdmin || getAdminSession(jid)) return false;
       await sock.sendMessage(jid, {
         text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
       });
