@@ -79,13 +79,14 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   }
 
   const pushName = msg.pushName || "Warga";
-  const [isAdmin, adminSettings] = await Promise.all([
-    isAdminJid(sock, jid, pushName),
-    getAdminSettings(),
-  ]);
 
-  // Admin TIDAK boleh diproses oleh wargaController sama sekali
-  if (isAdmin) return false;
+  // Ambil settings dengan fallback aman
+  let adminSettings = {};
+  try {
+    adminSettings = await getAdminSettings() || {};
+  } catch (e) {
+    console.warn("[WARGA_CTRL] Gagal ambil settings, gunakan default.");
+  }
 
   const normalizedText = String(bodyText || "").trim();
   if (!normalizedText) return;
@@ -94,29 +95,24 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
   // KONDISI 1: SESI BARU
   if (!session) {
-    // SECURITY GATE: Jangan pernah proses menu utama jika ini admin
-    if (isAdmin || getAdminSession(jid)) return false;
+    // SECURITY GATE: Cukup cek session admin saja karena isAdmin sudah dicek di Router
+    if (getAdminSession(jid)) return false;
 
+    const PID = process.pid;
     let mainMenu = null;
     try {
       const rawMenu = await getMainMenu();
+      console.log(`[WARGA_CTRL][PID:${PID}] Raw Admin API Response:`, JSON.stringify(rawMenu));
       mainMenu = rawMenu?.data || rawMenu;
     } catch (err) {
-      console.warn("[WARGA_CTRL] Gagal mengambil menu utama:", err.message);
+      console.warn(`[WARGA_CTRL][PID:${PID}] Gagal mengambil menu utama:`, err.message);
     }
 
     if (!mainMenu || !mainMenu.id) {
-      const sess = getAdminSession(jid);
-      console.log(`[WARGA_CTRL] !!! TRIGGER GANGGUAN !!! JID: ${jid} | isAdmin: ${isAdmin} | AdminSession: ${!!sess}`);
-
-      // Masih gagal/null? Cek lagi apakah ini admin (double lock)
-      if (isAdmin || sess) {
-        console.log(`[WARGA_CTRL] Silence gangguan for admin ${jid}`);
-        return false;
-      }
+      console.log(`[WARGA_CTRL][PID:${PID}] !!! TRIGGER GANGGUAN !!! JID: ${jid} | MenuID: ${mainMenu?.id}`);
 
       await sock.sendMessage(jid, {
-        text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
+        text: `Mohon maaf, layanan sistem sedang mengalami gangguan. [PID:${PID}]`,
       });
       return true;
     }

@@ -57,13 +57,13 @@ const registerRoutes = (sock) => {
                 if (isAdmin) {
                     // Hanya proses jika ini adalah perintah admin (diawali /)
                     if (bodyText.startsWith('/')) {
-                        console.log(`[ROUTER_GATEKEEPER] Admin Command -> ${jid}: ${bodyText}`);
+                        console.log(`[GATEKEEPER] P2 HIT: Admin Command (${jid})`);
                         await handleAdminMessage(sock, msg, bodyText);
                         return; // PRIORITAS 2: Stop here.
                     }
 
                     // Jika admin ketik biasa (bukan command), abaikan / jangan lempar ke warga flow
-                    console.log(`[ROUTER_GATEKEEPER] Admin Chat Biasa (Ignored) -> ${jid}`);
+                    console.log(`[GATEKEEPER] P2 HIT: Admin Chat Biasa -> IGNORE (${jid})`);
                     return;
                 }
 

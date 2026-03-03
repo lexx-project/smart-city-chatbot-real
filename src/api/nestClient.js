@@ -37,14 +37,19 @@ nestClient.interceptors.request.use((config) => {
 // CCTV 2: CEK KALAU NYASAR (ERROR)
 // ==========================================
 nestClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const PID = process.pid;
+    console.log(`[API_SUCCESS][PID:${PID}] URL: ${response.config.url} | Status: ${response.status}`);
+    return response;
+  },
   (error) => {
+    const PID = process.pid;
     const fullUrl = `${error.config?.baseURL || ""}${error.config?.url || ""}`;
     const status = error.response?.status || "Network Error";
     const msg = error.response?.data?.message || error.message;
 
     console.warn(
-      `[API_CAUTION] HTTP ${status} di URL: ${fullUrl} | Pesan: ${msg}`,
+      `[API_CAUTION][PID:${PID}] HTTP ${status} di URL: ${fullUrl} | Pesan: ${msg}`,
     );
     return Promise.reject(error);
   },
