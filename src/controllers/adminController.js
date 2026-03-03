@@ -2,9 +2,6 @@ const { isAdminJid } = require('../services/adminService');
 const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep } = require('../services/botFlowService');
 const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
 
-// Dedup: mencegah pesan yang sama diproses dua kali
-const processedMessageIds = new Set();
-const MAX_DEDUP_SIZE = 500;
 
 // ═══════════════════════════════════════════════════════
 //  KONFIGURASI KATEGORI & LABEL
@@ -307,20 +304,6 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     if (!jid) return false;
 
     const text = String(bodyText || '').trim();
-
-    // Dedup: skip jika pesan ini sudah pernah diproses
-    const msgId = msg?.key?.id;
-    if (msgId) {
-        if (processedMessageIds.has(msgId)) {
-            return true; // Sudah diproses, jangan proses ulang
-        }
-        processedMessageIds.add(msgId);
-        // Bersihkan set jika terlalu besar
-        if (processedMessageIds.size > MAX_DEDUP_SIZE) {
-            const entries = [...processedMessageIds];
-            entries.slice(0, entries.length - MAX_DEDUP_SIZE).forEach(id => processedMessageIds.delete(id));
-        }
-    }
 
     const isAdmin = await isAdminJid(sock, jid, pushName);
     if (!isAdmin) return false;
