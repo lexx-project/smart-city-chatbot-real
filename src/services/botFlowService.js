@@ -62,4 +62,36 @@ const updateCmsMessage = async (id, payload) => {
     }
 };
 
-module.exports = { getMainMenu, getStepById, submitTicket, getCmsMessages, updateCmsMessage };
+const createCmsFlow = async (payload) => {
+    const token = await getAdminToken();
+    if (!token) return null;
+
+    try {
+        const response = await nestClient.post('/cms/bot-flow/flows', payload, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        return response.data?.data || response.data;
+    } catch (error) {
+        if (error?.response?.status === 401) clearToken();
+        console.error('[CMS_CREATE_FLOW_ERROR]', error?.response?.data || error.message);
+        return null;
+    }
+};
+
+const createCmsStep = async (payload) => {
+    const token = await getAdminToken();
+    if (!token) return null;
+
+    try {
+        const response = await nestClient.post('/cms/bot-flow/steps', payload, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        return response.data?.data || response.data;
+    } catch (error) {
+        if (error?.response?.status === 401) clearToken();
+        console.error('[CMS_CREATE_STEP_ERROR]', error?.response?.data || error.message);
+        return null;
+    }
+};
+
+module.exports = { getMainMenu, getStepById, submitTicket, getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep };
