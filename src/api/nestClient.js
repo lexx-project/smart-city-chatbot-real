@@ -43,8 +43,8 @@ nestClient.interceptors.response.use(
     const status = error.response?.status || "Network Error";
     const msg = error.response?.data?.message || error.message;
 
-    console.error(
-      `[API NYASAR] ❌ HTTP ${status} di URL: ${fullUrl} | Pesan: ${msg}`,
+    console.warn(
+      `[API_CAUTION] HTTP ${status} di URL: ${fullUrl} | Pesan: ${msg}`,
     );
     return Promise.reject(error);
   },

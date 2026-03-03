@@ -94,12 +94,21 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
   // KONDISI 1: SESI BARU
   if (!session) {
-    const rawMenu = await getMainMenu();
-    const mainMenu = rawMenu?.data || rawMenu;
+    // SECURITY GATE: Jangan pernah proses menu utama jika ini admin
+    if (isAdmin || getAdminSession(jid)) return false;
+
+    let mainMenu = null;
+    try {
+      const rawMenu = await getMainMenu();
+      mainMenu = rawMenu?.data || rawMenu;
+    } catch (err) {
+      console.warn("[WARGA_CTRL] Gagal mengambil menu utama:", err.message);
+    }
 
     if (!mainMenu || !mainMenu.id) {
-      // SAFETY: Jangan kirim pesan error ke admin
+      // Masih gagal/null? Cek lagi apakah ini admin (double lock)
       if (isAdmin || getAdminSession(jid)) return false;
+
       await sock.sendMessage(jid, {
         text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
       });
