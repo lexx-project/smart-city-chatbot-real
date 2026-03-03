@@ -1,146 +1,91 @@
-const { normalizeToJid, displayAdminNumber } = require('../services/lidService');
-const { isAdminJid, addAdminJid, listAdminJids, removeAdminJid, getAdminSettings } = require('../services/adminService');
-
-const sendAccessDenied = async (sock, jid, command) => {
-    await sock.sendMessage(jid, { text: `Akses ditolak. Hanya admin yang bisa menggunakan ${command}.` });
-};
+const { isAdminJid } = require('../services/adminService');
+const { getCmsMessages, updateCmsMessage } = require('../services/botFlowService');
+const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
 
 const handleAdminMessage = async (sock, msg, bodyText = '') => {
     const jid = msg?.key?.remoteJid;
+    const pushName = msg.pushName || 'Admin';
     if (!jid) return false;
 
     const text = String(bodyText || '').trim();
-    if (!text.startsWith('/')) return false;
 
-    const normalized = text.toLowerCase();
-    const isAdmin = await isAdminJid(sock, jid, msg?.pushName || 'Admin');
+    const isAdmin = await isAdminJid(sock, jid, pushName);
+    if (!isAdmin) return false;
 
-    if (normalized === '/menuadmin') {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/menuadmin');
+    let session = getAdminSession(jid);
+
+    if (text.toLowerCase() === '/cancel') {
+        if (session) {
+            endAdminSession(jid);
+            await sock.sendMessage(jid, { text: '✅ Mode Pengaturan dibatalkan.' });
+        } else {
+            await sock.sendMessage(jid, { text: 'Tidak ada pengaturan yang sedang aktif.' });
+        }
+        return true;
+    }
+
+    if (text.toLowerCase() === '/setting') {
+        await sock.sendMessage(jid, { text: '⏳ _Mengambil daftar pesan dari server..._' });
+
+        const messages = await getCmsMessages();
+        if (!messages || messages.length === 0) {
+            await sock.sendMessage(jid, { text: '❌ Gagal memuat pesan. Pastikan bot memiliki akses login admin ke backend.' });
             return true;
         }
 
-        await sock.sendMessage(jid, {
-            text: [
-                'Daftar command admin:',
-                '',
-                '1. /menuadmin',
-                '2. /setting',
-                '3. /addadmin 628xxxxxxxxxx',
-                '4. /listadmin',
-                '5. /deladmin 628xxxxxxxxxx',
-                '6. /totalchat (nonaktif sementara)',
-                '7. /totalsesi (nonaktif sementara)',
-                '8. /batal',
-            ].join('\n'),
+        session = startAdminSession(jid);
+        session.data.messagesList = messages;
+
+        let reply = '⚙️ *PENGATURAN TEKS BOT*\n\nSilakan pilih pesan yang ingin diubah:\n\n';
+        messages.forEach((m, index) => {
+            const shortText = m.messageText.length > 40 ? m.messageText.substring(0, 40) + '...' : m.messageText;
+            reply += `*${index + 1}.* [${m.messageKey}]\n💬 _"${shortText}"_\n\n`;
         });
+
+        reply += '👉 _Balas dengan angka (contoh: 1)._\n🛑 _Ketik /cancel untuk membatalkan._';
+        await sock.sendMessage(jid, { text: reply });
         return true;
     }
 
-    if (normalized === '/batal') {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/batal');
+    if (session) {
+        if (session.step === 'SELECT_MESSAGE') {
+            const choice = parseInt(text);
+            const messages = session.data.messagesList;
+
+            if (isNaN(choice) || choice < 1 || choice > messages.length) {
+                await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Balas dengan angka yang tertera di menu.' });
+                return true;
+            }
+
+            const selectedMsg = messages[choice - 1];
+            updateAdminSession(jid, { step: 'AWAITING_INPUT', data: { ...session.data, selectedMsg } });
+
+            let reply = `📝 *UBAH PESAN: ${selectedMsg.messageKey}*\n\n`;
+            reply += `*Teks Saat Ini:*\n${selectedMsg.messageText}\n\n`;
+            reply += `✏️ _Silakan ketik teks pesan yang baru sekarang._\n🛑 _Ketik /cancel untuk batal._`;
+
+            await sock.sendMessage(jid, { text: reply });
             return true;
         }
 
-        await sock.sendMessage(jid, { text: 'Tidak ada flow admin aktif yang perlu dibatalkan.' });
-        return true;
-    }
+        if (session.step === 'AWAITING_INPUT') {
+            const selectedMsg = session.data.selectedMsg;
+            await sock.sendMessage(jid, { text: '⏳ _Menyimpan perubahan ke server..._' });
 
-    if (normalized === '/setting') {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/setting');
+            const result = await updateCmsMessage(selectedMsg.id, { messageText: text });
+
+            if (result) {
+                await sock.sendMessage(jid, { text: `✅ *BERHASIL!*\n\nTeks untuk *${selectedMsg.messageKey}* telah diperbarui.` });
+            } else {
+                await sock.sendMessage(jid, { text: `❌ *GAGAL!*\n\nTerjadi kesalahan saat menyimpan data.` });
+            }
+
+            endAdminSession(jid);
             return true;
         }
-
-        const settings = await getAdminSettings();
-        await sock.sendMessage(jid, {
-            text: [
-                'Ringkasan Bot Settings (read-only):',
-                '',
-                `GREETING_MSG: ${settings.GREETING_MSG || '-'}`,
-                `SESSION_END_TEXT: ${settings.SESSION_END_TEXT || '-'}`,
-                `TIMEOUT_SEC: ${settings.TIMEOUT_SEC || '-'}`,
-                '',
-                'Perubahan settings via WhatsApp command dinonaktifkan sementara.',
-            ].join('\n'),
-        });
-        return true;
-    }
-
-    if (normalized.startsWith('/addadmin')) {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/addadmin');
-            return true;
-        }
-
-        const candidate = text.split(/\s+/)[1] || '';
-        const targetJid = normalizeToJid(candidate);
-        if (!targetJid) {
-            await sock.sendMessage(jid, { text: 'Format salah. Gunakan: /addadmin 628xxxxxxxxxx' });
-            return true;
-        }
-
-        const admins = await addAdminJid(targetJid);
-        await sock.sendMessage(jid, { text: `Admin runtime ditambahkan: ${targetJid}\nTotal admin terdaftar: ${admins.length}` });
-        return true;
-    }
-
-    if (normalized === '/listadmin') {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/listadmin');
-            return true;
-        }
-
-        const admins = await listAdminJids();
-        const lines = [];
-        for (let index = 0; index < admins.length; index += 1) {
-            const numberOnly = await displayAdminNumber(admins[index]);
-            lines.push(`${index + 1}. ${numberOnly || admins[index]}`);
-        }
-
-        await sock.sendMessage(jid, { text: `Daftar admin saat ini:\n\n${lines.join('\n')}` });
-        return true;
-    }
-
-    if (normalized.startsWith('/deladmin')) {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, '/deladmin');
-            return true;
-        }
-
-        const candidate = text.split(/\s+/)[1] || '';
-        if (!candidate) {
-            await sock.sendMessage(jid, { text: 'Format salah. Gunakan: /deladmin 628xxxxxxxxxx' });
-            return true;
-        }
-
-        const result = await removeAdminJid(candidate);
-        if (!result.removed) {
-            await sock.sendMessage(jid, { text: 'Admin tidak ditemukan pada override runtime.' });
-            return true;
-        }
-
-        await sock.sendMessage(jid, { text: `Admin runtime dihapus: ${candidate}` });
-        return true;
-    }
-
-    if (normalized === '/totalchat' || normalized === '/totalsesi') {
-        if (!isAdmin) {
-            await sendAccessDenied(sock, jid, normalized); 
-            return true;
-        }
-
-        await sock.sendMessage(jid, {
-            text: 'Fitur statistik sedang dinonaktifkan sementara selama migrasi ke Backend NestJS.',
-        });
-        return true;
     }
 
     return false;
 };
 
-module.exports = {
-    handleAdminMessage,
-};
+module.exports = { handleAdminMessage };
