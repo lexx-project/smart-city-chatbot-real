@@ -1,7 +1,7 @@
 const adminSessions = {};
 
 const startAdminSession = (jid) => {
-    adminSessions[jid] = { step: 'SELECT_MESSAGE', data: {} };
+    adminSessions[jid] = { step: 'SELECT_CATEGORY', data: {} };
     return adminSessions[jid];
 };
 
