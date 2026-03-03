@@ -42,12 +42,12 @@ const registerRoutes = (sock) => {
                 // ═══════════════════════════════════════════
                 //  MASTER GATEKEEPER: Prioritized Waterfall
                 // ═══════════════════════════════════════════
-                console.log(`[GATEKEEPER] Incoming: "${bodyText}" from ${jid}`);
+                console.log(`[GATEKEEPER][PID:${process.pid}] Incoming: "${bodyText}" from ${jid}`);
 
                 // STEP B: Synchronous Admin Session Check (Instant/Memory)
                 const session = getAdminSession(jid);
                 if (session) {
-                    console.log(`[GATEKEEPER] P1 HIT: Admin Session Aktif (${jid})`);
+                    console.log(`[GATEKEEPER][PID:${process.pid}] P1 HIT: Admin Session Aktif (${jid})`);
                     await handleAdminMessage(sock, msg, bodyText);
                     return; // PRIORITAS 1: Stop here.
                 }
@@ -57,25 +57,25 @@ const registerRoutes = (sock) => {
                 if (isAdmin) {
                     // Hanya proses jika ini adalah perintah admin (diawali /)
                     if (bodyText.startsWith('/')) {
-                        console.log(`[GATEKEEPER] P2 HIT: Admin Command (${jid})`);
+                        console.log(`[GATEKEEPER][PID:${process.pid}] P2 HIT: Admin Command (${jid})`);
                         await handleAdminMessage(sock, msg, bodyText);
                         return; // PRIORITAS 2: Stop here.
                     }
 
                     // Jika admin ketik biasa (bukan command), abaikan / jangan lempar ke warga flow
-                    console.log(`[GATEKEEPER] P2 HIT: Admin Chat Biasa -> IGNORE (${jid})`);
+                    console.log(`[GATEKEEPER][PID:${process.pid}] P2 HIT: Admin Chat Biasa -> IGNORE (${jid})`);
                     return;
                 }
 
                 // STEP D: Warga Catch-all
                 // Hanya reached jika bukan admin session dan bukan admin command
                 if (!bodyText) continue;
-                console.log(`[GATEKEEPER] P3 HIT: Warga Flow (${jid})`);
+                console.log(`[GATEKEEPER][PID:${process.pid}] P3 HIT: Warga Flow (${jid})`);
                 logIncomingChat(msg, 'WARGA');
                 await handleWargaMessage(sock, msg, bodyText);
 
             } catch (error) {
-                console.error('[MASTER_GATEKEEPER_ERROR]', error);
+                console.error(`[MASTER_GATEKEEPER_ERROR][PID:${process.pid}]`, error);
             }
         }
     });

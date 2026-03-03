@@ -6,6 +6,7 @@ const getMainMenu = async () => {
         const response = await nestClient.get('/bot-flow/menu');
         return response.data;
     } catch (error) {
+        console.error(`[FLOW_SERVICE][PID:${process.pid}] getMainMenu FAILED:`, error.message, error.code);
         return null;
     }
 };
@@ -15,6 +16,7 @@ const getStepById = async (stepId) => {
         const response = await nestClient.get(`/bot-flow/step/${stepId}`);
         return response.data;
     } catch (error) {
+        console.error(`[FLOW_SERVICE][PID:${process.pid}] getStepById FAILED:`, error.message, error.code);
         return null;
     }
 };
