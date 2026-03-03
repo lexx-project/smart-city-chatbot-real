@@ -38,34 +38,36 @@ const registerRoutes = (sock) => {
 
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
-                const pushName = msg.pushName || '';
 
                 // ═══════════════════════════════════════════
-                //  TOTAL SESSION ISOLATION
-                //  Resolve isAdmin di level router SEBELUM
-                //  memanggil controller manapun
+                //  STEP 1: CEK SESSION DULU (SYNCHRONOUS!)
+                //  getAdminSession() baca dari memory, INSTANT.
+                //  Tidak bergantung pada API yang bisa gagal.
                 // ═══════════════════════════════════════════
-                const isAdmin = await isAdminJid(sock, jid, pushName);
                 const adminSession = getAdminSession(jid);
-
-                // CASE 1: Admin dengan sesi aktif → HANYA adminController, STOP.
-                if (isAdmin && adminSession) {
+                if (adminSession) {
+                    // Ada sesi admin aktif → langsung ke adminController, STOP.
                     await handleAdminMessage(sock, msg, bodyText);
-                    continue; // JANGAN pernah ke wargaController
-                }
-
-                // CASE 2: Admin tanpa sesi aktif → coba adminController dulu
-                if (isAdmin) {
-                    const handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
-                    if (handledByAdmin) continue;
-                    // Admin tanpa sesi & bukan command → skip wargaController juga
                     continue;
                 }
 
-                // CASE 3: Bukan admin → wargaController
-                if (!bodyText) continue;
-                logIncomingChat(msg, 'WARGA');
-                await handleWargaMessage(sock, msg, bodyText);
+                // ═══════════════════════════════════════════
+                //  STEP 2: CEK ADMIN (ASYNC) — hanya jika
+                //  tidak ada session aktif
+                // ═══════════════════════════════════════════
+                const pushName = msg.pushName || '';
+                const isAdmin = await isAdminJid(sock, jid, pushName);
+
+                if (isAdmin) {
+                    // Admin tanpa sesi → coba handle command (/buildmenu dll)
+                    await handleAdminMessage(sock, msg, bodyText);
+                    continue; // Admin TIDAK PERNAH ke wargaController
+                } else {
+                    // Bukan admin → wargaController
+                    if (!bodyText) continue;
+                    logIncomingChat(msg, 'WARGA');
+                    await handleWargaMessage(sock, msg, bodyText);
+                }
 
             } catch (error) {
                 console.error('[ROUTER_MESSAGE_ERROR]', error);
