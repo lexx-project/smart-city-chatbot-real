@@ -2,6 +2,8 @@ const { handleAdminMessage } = require('../controllers/adminController');
 const { handleWargaMessage } = require('../controllers/wargaController');
 const { logIncomingChat } = require('../utils/logger');
 const { extractBodyText, shouldSkipMessage, isStaleMessage } = require('../middlewares/messageMiddleware');
+const { isAdminJid } = require('../services/adminService');
+const { getAdminSession } = require('../services/adminSessionService');
 
 // ═══════════════════════════════════════════════════════
 //  GLOBAL MESSAGE LOCKING — Mencegah double-processing
@@ -18,13 +20,9 @@ const registerRoutes = (sock) => {
             // ── GLOBAL DEDUP: Cek & lock message ID ──
             const msgId = msg?.key?.id;
             if (msgId) {
-                if (processedMessageIds.has(msgId)) {
-                    // Pesan ini sudah pernah diproses, skip sepenuhnya
-                    continue;
-                }
+                if (processedMessageIds.has(msgId)) continue;
                 processedMessageIds.add(msgId);
-                // Auto-cleanup setelah 10 detik untuk hemat memori
-                setTimeout(() => processedMessageIds.delete(msgId), 10_000);
+                setTimeout(() => processedMessageIds.delete(msgId), 5_000);
             }
 
             let handledByAdmin = false;
@@ -43,8 +41,17 @@ const registerRoutes = (sock) => {
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
 
+                // ── ADMIN FLOW ──
                 handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
                 if (handledByAdmin) continue;
+
+                // ── ADMIN SESSION GUARD ──
+                // Jika admin punya sesi aktif, JANGAN teruskan ke wargaController
+                const adminSession = getAdminSession(jid);
+                if (adminSession) {
+                    console.log(`[ROUTER] Admin ${jid} punya sesi aktif (step: ${adminSession.step}), skip wargaController`);
+                    continue;
+                }
 
                 if (!bodyText) continue;
                 logIncomingChat(msg, 'WARGA');
@@ -52,7 +59,7 @@ const registerRoutes = (sock) => {
                 await handleWargaMessage(sock, msg, bodyText);
             } catch (error) {
                 console.error('[ROUTER_MESSAGE_ERROR]', error);
-                // Jika error terjadi di flow admin, JANGAN kirim pesan "gangguan" ke admin
+                // Jika error terjadi di flow admin, JANGAN trigger apapun
                 if (handledByAdmin) continue;
             }
         }

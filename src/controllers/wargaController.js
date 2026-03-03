@@ -75,7 +75,9 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     getAdminSettings(),
   ]);
 
-  if (isAdmin && bodyText.startsWith("/")) return false;
+  // Admin TIDAK boleh diproses oleh wargaController sama sekali
+  // Semua pesan admin harus ditangani oleh adminController
+  if (isAdmin) return false;
 
   const normalizedText = String(bodyText || "").trim();
   if (!normalizedText) return;
