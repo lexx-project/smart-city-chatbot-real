@@ -25,8 +25,6 @@ const registerRoutes = (sock) => {
                 setTimeout(() => processedMessageIds.delete(msgId), 5_000);
             }
 
-            let handledByAdmin = false;
-
             try {
                 if (shouldSkipMessage(msg)) continue;
 
@@ -40,27 +38,37 @@ const registerRoutes = (sock) => {
 
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
+                const pushName = msg.pushName || '';
 
-                // ── ADMIN FLOW ──
-                handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
-                if (handledByAdmin) continue;
-
-                // ── ADMIN SESSION GUARD ──
-                // Jika admin punya sesi aktif, JANGAN teruskan ke wargaController
+                // ═══════════════════════════════════════════
+                //  TOTAL SESSION ISOLATION
+                //  Resolve isAdmin di level router SEBELUM
+                //  memanggil controller manapun
+                // ═══════════════════════════════════════════
+                const isAdmin = await isAdminJid(sock, jid, pushName);
                 const adminSession = getAdminSession(jid);
-                if (adminSession) {
-                    console.log(`[ROUTER] Admin ${jid} punya sesi aktif (step: ${adminSession.step}), skip wargaController`);
+
+                // CASE 1: Admin dengan sesi aktif → HANYA adminController, STOP.
+                if (isAdmin && adminSession) {
+                    await handleAdminMessage(sock, msg, bodyText);
+                    continue; // JANGAN pernah ke wargaController
+                }
+
+                // CASE 2: Admin tanpa sesi aktif → coba adminController dulu
+                if (isAdmin) {
+                    const handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
+                    if (handledByAdmin) continue;
+                    // Admin tanpa sesi & bukan command → skip wargaController juga
                     continue;
                 }
 
+                // CASE 3: Bukan admin → wargaController
                 if (!bodyText) continue;
                 logIncomingChat(msg, 'WARGA');
-
                 await handleWargaMessage(sock, msg, bodyText);
+
             } catch (error) {
                 console.error('[ROUTER_MESSAGE_ERROR]', error);
-                // Jika error terjadi di flow admin, JANGAN trigger apapun
-                if (handledByAdmin) continue;
             }
         }
     });
