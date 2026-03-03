@@ -106,8 +106,14 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     }
 
     if (!mainMenu || !mainMenu.id) {
+      const sess = getAdminSession(jid);
+      console.log(`[WARGA_CTRL] !!! TRIGGER GANGGUAN !!! JID: ${jid} | isAdmin: ${isAdmin} | AdminSession: ${!!sess}`);
+
       // Masih gagal/null? Cek lagi apakah ini admin (double lock)
-      if (isAdmin || getAdminSession(jid)) return false;
+      if (isAdmin || sess) {
+        console.log(`[WARGA_CTRL] Silence gangguan for admin ${jid}`);
+        return false;
+      }
 
       await sock.sendMessage(jid, {
         text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",

