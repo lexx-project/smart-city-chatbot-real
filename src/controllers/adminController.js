@@ -2,6 +2,10 @@ const { isAdminJid } = require('../services/adminService');
 const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep } = require('../services/botFlowService');
 const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
 
+// Dedup: mencegah pesan yang sama diproses dua kali
+const processedMessageIds = new Set();
+const MAX_DEDUP_SIZE = 500;
+
 // ═══════════════════════════════════════════════════════
 //  KONFIGURASI KATEGORI & LABEL
 // ═══════════════════════════════════════════════════════
@@ -303,6 +307,20 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     if (!jid) return false;
 
     const text = String(bodyText || '').trim();
+
+    // Dedup: skip jika pesan ini sudah pernah diproses
+    const msgId = msg?.key?.id;
+    if (msgId) {
+        if (processedMessageIds.has(msgId)) {
+            return true; // Sudah diproses, jangan proses ulang
+        }
+        processedMessageIds.add(msgId);
+        // Bersihkan set jika terlalu besar
+        if (processedMessageIds.size > MAX_DEDUP_SIZE) {
+            const entries = [...processedMessageIds];
+            entries.slice(0, entries.length - MAX_DEDUP_SIZE).forEach(id => processedMessageIds.delete(id));
+        }
+    }
 
     const isAdmin = await isAdminJid(sock, jid, pushName);
     if (!isAdmin) return false;
@@ -837,30 +855,19 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     //  BUILD_FLOW_TITLE — Admin memasukkan nama menu
     // ────────────────────────────────────────────────────
     if (session.step === 'BUILD_FLOW_TITLE') {
-        const flowTitle = text;
-
-        if (flowTitle.length < 3) {
-            await sock.sendMessage(jid, {
-                text: '❌ Nama menu terlalu pendek. Minimal 3 karakter. Silakan coba lagi.',
-            });
+        if (text.length < 3) {
+            await sock.sendMessage(jid, { text: '❌ Nama menu terlalu pendek. Minimal 3 karakter.' });
             return true;
         }
-
-        updateAdminSession(jid, {
-            step: 'BUILD_FLOW_KEYWORD',
-            data: { ...session.data, flowTitle },
-        });
+        updateAdminSession(jid, { step: 'BUILD_FLOW_KEYWORD', data: { ...session.data, flowTitle: text } });
 
         let reply = '🔨 *WIZARD: BUAT MENU LAYANAN BARU*\n';
-        reply += '📍 _Langkah 1 dari 2: Data Menu_\n';
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `✅ Judul: *${flowTitle}*\n\n`;
-        reply += '🔑 Sekarang masukkan *Keyword/Slug* unik untuk menu ini.\n';
-        reply += '_Gunakan huruf kecil, tanpa spasi (gunakan underscore)._\n\n';
+        reply += `✅ Judul: *${text}*\n\n`;
+        reply += '🔑 Masukkan *Keyword/Slug* unik untuk menu ini.\n';
+        reply += '_Huruf kecil, tanpa spasi (gunakan underscore)._\n\n';
         reply += '_Contoh: jalan_rusak_\n\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
         await sock.sendMessage(jid, { text: reply });
         return true;
     }
@@ -870,11 +877,8 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     // ────────────────────────────────────────────────────
     if (session.step === 'BUILD_FLOW_KEYWORD') {
         const rawKeyword = text.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-
         if (rawKeyword.length < 2) {
-            await sock.sendMessage(jid, {
-                text: '❌ Keyword tidak valid. Minimal 2 karakter (huruf kecil & underscore). Coba lagi.',
-            });
+            await sock.sendMessage(jid, { text: '❌ Keyword tidak valid. Minimal 2 karakter (huruf kecil & underscore).' });
             return true;
         }
 
@@ -885,12 +889,7 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
         let flowResult;
         try {
-            flowResult = await createCmsFlow({
-                keyword,
-                title: flowTitle,
-                orderNumber: 0,
-                isActive: true,
-            });
+            flowResult = await createCmsFlow({ keyword, flowName: flowTitle, orderNumber: 0, isActive: true });
         } catch (err) {
             console.error('[BUILD_MENU] createCmsFlow error:', err?.message);
             flowResult = null;
@@ -898,42 +897,186 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
         if (!flowResult || !flowResult.id) {
             await sock.sendMessage(jid, {
-                text:
-                    '❌ *GAGAL MEMBUAT MENU*\n\n' +
-                    'Server backend tidak merespons atau data tidak valid.\n\n' +
-                    '*Kemungkinan penyebab:*\n' +
-                    '• Server NestJS belum berjalan\n' +
-                    '• Keyword sudah digunakan\n' +
-                    '• Kredensial admin tidak valid\n\n' +
-                    '💡 _Cek log terminal bot untuk detail error._',
+                text: '❌ *GAGAL MEMBUAT MENU*\n\nServer backend tidak merespons atau data tidak valid.\n\n*Kemungkinan penyebab:*\n• Server NestJS belum berjalan\n• Keyword sudah digunakan\n• Kredensial admin tidak valid\n\n💡 _Cek log terminal bot untuk detail error._',
             });
             endAdminSession(jid);
             return true;
         }
 
         updateAdminSession(jid, {
-            step: 'BUILD_STEP_TEXT',
-            data: {
-                ...session.data,
-                flowKeyword: keyword,
-                flowId: flowResult.id,
-                stepCounter: 1,
-                stepsCreated: 0,
-            },
+            step: 'BUILD_MENU_TYPE',
+            data: { ...session.data, flowKeyword: keyword, flowId: flowResult.id, stepCounter: 1, stepsCreated: 0 },
         });
 
         let reply = '🔨 *WIZARD: BUAT MENU LAYANAN BARU*\n';
-        reply += '📍 _Langkah 2 dari 2: Buat Pertanyaan_\n';
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
         reply += `✅ Menu *"${flowTitle}"* berhasil disimpan!\n`;
         reply += `🔑 Keyword: \`${keyword}\`\n\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `📝 *Pertanyaan #1*\n`;
+        reply += '📌 Pilih *Tipe Menu*:\n\n';
+        reply += '*1.* 📡 Informatif (Fetch API) — Menu yang menampilkan data dari API\n';
+        reply += '*2.* 📝 Pengecekan (Warga Input) — Menu yang meminta input dari warga\n\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n👉 _Balas dengan angka (1-2)_\n🛑 _Ketik /cancel untuk membatalkan_';
+        await sock.sendMessage(jid, { text: reply });
+        return true;
+    }
+
+    // ────────────────────────────────────────────────────
+    //  BUILD_MENU_TYPE — Pilih Informatif atau Pengecekan
+    // ────────────────────────────────────────────────────
+    if (session.step === 'BUILD_MENU_TYPE') {
+        if (text !== '1' && text !== '2') {
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Balas dengan angka *1* atau *2*.' });
+            return true;
+        }
+
+        const menuType = text === '1' ? 'informatif' : 'pengecekan';
+
+        if (menuType === 'informatif') {
+            updateAdminSession(jid, { step: 'BUILD_INFO_URL', data: { ...session.data, menuType } });
+
+            let reply = '🔨 *WIZARD: MENU INFORMATIF*\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += '📡 Masukkan *URL API* untuk menu ini.\n\n';
+            reply += '_Contoh: https://api.kota.go.id/info/jadwal-pelayanan_\n\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
+            await sock.sendMessage(jid, { text: reply });
+        } else {
+            updateAdminSession(jid, { step: 'BUILD_STEP_COUNT', data: { ...session.data, menuType } });
+
+            let reply = '🔨 *WIZARD: MENU PENGECEKAN*\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += '📝 Berapa jumlah *Sub-Menu (Pertanyaan/Step)* yang ingin dibuat?\n\n';
+            reply += '_Contoh: 3_\n\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
+            await sock.sendMessage(jid, { text: reply });
+        }
+        return true;
+    }
+
+    // ════════════════════════════════════════════════════
+    //  INFORMATIF BRANCH
+    // ════════════════════════════════════════════════════
+
+    // ────────────────────────────────────────────────────
+    //  BUILD_INFO_URL — Admin memasukkan URL API
+    // ────────────────────────────────────────────────────
+    if (session.step === 'BUILD_INFO_URL') {
+        if (!text.startsWith('http://') && !text.startsWith('https://')) {
+            await sock.sendMessage(jid, { text: '❌ URL tidak valid. Harus diawali dengan *http://* atau *https://*.' });
+            return true;
+        }
+
+        updateAdminSession(jid, { step: 'BUILD_INFO_TEMPLATE', data: { ...session.data, apiUrl: text } });
+
+        let reply = '🔨 *WIZARD: MENU INFORMATIF*\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+        reply += `✅ URL API: ${text}\n\n`;
+        reply += '📄 Masukkan *Template Respon*.\n';
+        reply += 'Gunakan `{data.key}` untuk variabel dari API.\n\n';
+        reply += '_Contoh:_\n';
+        reply += '_📋 *Jadwal Pelayanan*_\n';
+        reply += '_Hari: {data.hari}_\n';
+        reply += '_Jam: {data.jam}_\n\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
+        await sock.sendMessage(jid, { text: reply });
+        return true;
+    }
+
+    // ────────────────────────────────────────────────────
+    //  BUILD_INFO_TEMPLATE — Admin memasukkan template respon + simpan step
+    // ────────────────────────────────────────────────────
+    if (session.step === 'BUILD_INFO_TEMPLATE') {
+        if (text.length < 5) {
+            await sock.sendMessage(jid, { text: '❌ Template terlalu pendek. Minimal 5 karakter.' });
+            return true;
+        }
+
+        const { flowId, flowTitle, flowKeyword, apiUrl } = session.data;
+
+        await sock.sendMessage(jid, { text: '⏳ _Menyimpan konfigurasi informatif ke server..._' });
+
+        // Simpan step info untuk API URL
+        let step1Result;
+        try {
+            step1Result = await createCmsStep({
+                flowId,
+                stepKey: 'fetch_api',
+                stepOrder: 1,
+                inputType: 'info',
+                messageText: apiUrl,
+                isRequired: false,
+            });
+        } catch (err) {
+            console.error('[BUILD_MENU] createCmsStep (info url) error:', err?.message);
+            step1Result = null;
+        }
+
+        // Simpan step template respon
+        let step2Result;
+        try {
+            step2Result = await createCmsStep({
+                flowId,
+                stepKey: 'response_template',
+                stepOrder: 2,
+                inputType: 'info',
+                messageText: text,
+                isRequired: false,
+            });
+        } catch (err) {
+            console.error('[BUILD_MENU] createCmsStep (info template) error:', err?.message);
+            step2Result = null;
+        }
+
+        if (!step1Result || !step2Result) {
+            await sock.sendMessage(jid, {
+                text: '❌ *GAGAL MENYIMPAN KONFIGURASI*\n\nServer backend tidak merespons.\n💡 _Cek log terminal bot untuk detail error._',
+            });
+            endAdminSession(jid);
+            return true;
+        }
+
+        let reply = '🎉 *MENU INFORMATIF BERHASIL DIBUAT!*\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+        reply += `📋 *Menu:* ${flowTitle}\n`;
+        reply += `🔑 *Keyword:* \`${flowKeyword}\`\n`;
+        reply += `📡 *URL API:* ${apiUrl}\n`;
+        reply += `📄 *Template:* _"${truncateText(text, 50)}"_\n\n`;
+        reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+        reply += '_Menu sudah aktif dan siap digunakan!_\n';
+        reply += '_Ketik /buildmenu untuk membuat menu baru lainnya._';
+
+        await sock.sendMessage(jid, { text: reply });
+        endAdminSession(jid);
+        return true;
+    }
+
+    // ════════════════════════════════════════════════════
+    //  PENGECEKAN BRANCH
+    // ════════════════════════════════════════════════════
+
+    // ────────────────────────────────────────────────────
+    //  BUILD_STEP_COUNT — Admin menentukan jumlah step
+    // ────────────────────────────────────────────────────
+    if (session.step === 'BUILD_STEP_COUNT') {
+        const totalSteps = parseInt(text, 10);
+        if (isNaN(totalSteps) || totalSteps < 1 || totalSteps > 20) {
+            await sock.sendMessage(jid, { text: '❌ Jumlah tidak valid. Masukkan angka antara *1-20*.' });
+            return true;
+        }
+
+        updateAdminSession(jid, {
+            step: 'BUILD_STEP_TEXT',
+            data: { ...session.data, totalSteps, stepCounter: 1, stepsCreated: 0 },
+        });
+
+        let reply = '🔨 *WIZARD: MENU PENGECEKAN*\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+        reply += `✅ Akan membuat *${totalSteps} pertanyaan*.\n\n`;
+        reply += `📝 *Pertanyaan #1 dari ${totalSteps}*\n`;
         reply += 'Ketik teks pertanyaan yang akan dikirim bot ke warga.\n\n';
         reply += '_Contoh: Kirimkan foto jalan yang rusak_\n\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
         await sock.sendMessage(jid, { text: reply });
         return true;
     }
@@ -942,91 +1085,69 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     //  BUILD_STEP_TEXT — Admin memasukkan teks pertanyaan
     // ────────────────────────────────────────────────────
     if (session.step === 'BUILD_STEP_TEXT') {
-        const messageText = text;
-
-        if (messageText.length < 5) {
-            await sock.sendMessage(jid, {
-                text: '❌ Teks pertanyaan terlalu pendek. Minimal 5 karakter. Silakan coba lagi.',
-            });
+        if (text.length < 5) {
+            await sock.sendMessage(jid, { text: '❌ Teks pertanyaan terlalu pendek. Minimal 5 karakter.' });
             return true;
         }
 
-        updateAdminSession(jid, {
-            step: 'BUILD_STEP_TYPE',
-            data: { ...session.data, currentStepText: messageText },
-        });
+        updateAdminSession(jid, { step: 'BUILD_STEP_TYPE', data: { ...session.data, currentStepText: text } });
 
-        const stepNum = session.data.stepCounter;
+        const { stepCounter, totalSteps } = session.data;
         let reply = '🔨 *WIZARD: BUAT PERTANYAAN*\n';
-        reply += `📍 _Pertanyaan #${stepNum} — Pilih Tipe_\n`;
+        reply += `📍 _Pertanyaan #${stepCounter} dari ${totalSteps} — Pilih Tipe_\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `📝 Teks: _"${truncateText(messageText, 60)}"_\n\n`;
-        reply += 'Pilih *tipe jawaban* yang diharapkan:\n\n';
+        reply += `📝 Teks: _"${truncateText(text, 60)}"_\n\n`;
+        reply += 'Pilih *tipe input* yang diharapkan:\n\n';
         reply += '*1.* 💬 Text (Jawaban teks biasa)\n';
-        reply += '*2.* 📸 Image (Kirim foto)\n';
-        reply += '*3.* 📍 Location (Kirim lokasi)\n';
-        reply += '*4.* 📋 Choice (Pilihan ganda)\n\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '👉 _Balas dengan angka (1-4)_\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+        reply += '*2.* 🔢 Number (Angka)\n';
+        reply += '*3.* 📋 Select (Pilihan ganda)\n';
+        reply += '*4.* ✅ Confirmation (Ya/Tidak)\n';
+        reply += '*5.* ℹ️ Info (Pesan informatif, tidak perlu jawaban)\n\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n👉 _Balas dengan angka (1-5)_\n🛑 _Ketik /cancel untuk membatalkan_';
         await sock.sendMessage(jid, { text: reply });
         return true;
     }
 
     // ────────────────────────────────────────────────────
-    //  BUILD_STEP_TYPE — Admin memilih tipe jawaban
+    //  BUILD_STEP_TYPE — Admin memilih tipe input
     // ────────────────────────────────────────────────────
     if (session.step === 'BUILD_STEP_TYPE') {
-        const typeMap = { '1': 'text', '2': 'image', '3': 'location', '4': 'choice' };
-        const typeLabelMap = { '1': '💬 Text', '2': '📸 Image', '3': '📍 Location', '4': '📋 Choice' };
+        const typeMap = { '1': 'text', '2': 'number', '3': 'select', '4': 'confirmation', '5': 'info' };
+        const typeLabelMap = { '1': '💬 Text', '2': '🔢 Number', '3': '📋 Select', '4': '✅ Confirmation', '5': 'ℹ️ Info' };
         const selectedType = typeMap[text];
 
         if (!selectedType) {
-            await sock.sendMessage(jid, {
-                text: '❌ Pilihan tidak valid. Balas dengan angka *1-4*.',
-            });
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Balas dengan angka *1-5*.' });
             return true;
         }
 
-        updateAdminSession(jid, {
-            step: 'BUILD_STEP_REQ',
-            data: { ...session.data, currentStepType: selectedType },
-        });
+        updateAdminSession(jid, { step: 'BUILD_STEP_REQ', data: { ...session.data, currentStepType: selectedType } });
 
-        const stepNum = session.data.stepCounter;
+        const { stepCounter, totalSteps } = session.data;
         let reply = '🔨 *WIZARD: BUAT PERTANYAAN*\n';
-        reply += `📍 _Pertanyaan #${stepNum} — Wajib?_\n`;
+        reply += `📍 _Pertanyaan #${stepCounter} dari ${totalSteps} — Wajib?_\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
         reply += `📝 Teks: _"${truncateText(session.data.currentStepText, 50)}"_\n`;
         reply += `🔖 Tipe: *${typeLabelMap[text]}*\n\n`;
         reply += 'Apakah pertanyaan ini *wajib diisi* oleh warga?\n\n';
-        reply += '*Y* = Ya, wajib\n';
-        reply += '*N* = Tidak, opsional\n\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+        reply += '*Y* = Ya, wajib\n*N* = Tidak, opsional\n\n';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
         await sock.sendMessage(jid, { text: reply });
         return true;
     }
 
     // ────────────────────────────────────────────────────
-    //  BUILD_STEP_REQ — Wajib/opsional + simpan step
+    //  BUILD_STEP_REQ — Wajib/opsional + simpan step + auto-loop
     // ────────────────────────────────────────────────────
     if (session.step === 'BUILD_STEP_REQ') {
         const answer = text.toUpperCase();
-
         if (answer !== 'Y' && answer !== 'N') {
-            await sock.sendMessage(jid, {
-                text: '❌ Pilihan tidak valid. Ketik *Y* (wajib) atau *N* (opsional).',
-            });
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Ketik *Y* (wajib) atau *N* (opsional).' });
             return true;
         }
 
         const isRequired = answer === 'Y';
-        const { flowId, currentStepText, currentStepType, stepCounter, flowTitle } = session.data;
-
-        // Generate keyword untuk step
+        const { flowId, currentStepText, currentStepType, stepCounter, flowTitle, totalSteps } = session.data;
         const stepKeyword = `ask_${currentStepType}_${stepCounter}`;
 
         await sock.sendMessage(jid, { text: '⏳ _Menyimpan pertanyaan ke server..._' });
@@ -1035,9 +1156,9 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
         try {
             stepResult = await createCmsStep({
                 flowId,
-                keyword: stepKeyword,
+                stepKey: stepKeyword,
                 stepOrder: stepCounter,
-                type: currentStepType,
+                inputType: currentStepType,
                 messageText: currentStepText,
                 isRequired,
             });
@@ -1048,97 +1169,58 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
         if (!stepResult) {
             await sock.sendMessage(jid, {
-                text:
-                    '❌ *GAGAL MENYIMPAN PERTANYAAN*\n\n' +
-                    'Server backend tidak merespons.\n' +
-                    '💡 _Cek log terminal bot untuk detail error._\n\n' +
-                    `_Menu "${flowTitle}" tetap tersimpan. Anda bisa menambah pertanyaan nanti via /buildmenu._`,
+                text: `❌ *GAGAL MENYIMPAN PERTANYAAN*\n\nServer backend tidak merespons.\n💡 _Cek log terminal bot untuk detail error._\n\n_Menu "${flowTitle}" tetap tersimpan._`,
             });
             endAdminSession(jid);
             return true;
         }
 
         const stepsCreated = (session.data.stepsCreated || 0) + 1;
+        const nextStep = stepCounter + 1;
+        const typeLabels = { text: '💬 Text', number: '🔢 Number', select: '📋 Select', confirmation: '✅ Confirmation', info: 'ℹ️ Info' };
 
-        updateAdminSession(jid, {
-            step: 'BUILD_STEP_MORE',
-            data: {
-                ...session.data,
-                stepsCreated,
-                stepCounter: stepCounter + 1,
-                currentStepText: undefined,
-                currentStepType: undefined,
-            },
-        });
-
-        const typeLabels = { text: '💬 Text', image: '📸 Image', location: '📍 Location', choice: '📋 Choice' };
-
-        let reply = '🔨 *WIZARD: BUAT PERTANYAAN*\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `✅ *Pertanyaan #${stepCounter} berhasil disimpan!*\n\n`;
-        reply += `📝 Teks: _"${truncateText(currentStepText, 50)}"_\n`;
-        reply += `🔖 Tipe: ${typeLabels[currentStepType] || currentStepType}\n`;
-        reply += `📌 Wajib: ${isRequired ? 'Ya' : 'Tidak'}\n\n`;
-        reply += `📊 _Total pertanyaan tersimpan: ${stepsCreated}_\n\n`;
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += '🔄 Ingin menambah pertanyaan lagi?\n\n';
-        reply += '*Y* = Ya, tambah pertanyaan baru\n';
-        reply += '*N* = Tidak, selesai\n\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
-        await sock.sendMessage(jid, { text: reply });
-        return true;
-    }
-
-    // ────────────────────────────────────────────────────
-    //  BUILD_STEP_MORE — Tambah pertanyaan lagi atau selesai
-    // ────────────────────────────────────────────────────
-    if (session.step === 'BUILD_STEP_MORE') {
-        const answer = text.toUpperCase();
-
-        if (answer !== 'Y' && answer !== 'N') {
-            await sock.sendMessage(jid, {
-                text: '❌ Pilihan tidak valid. Ketik *Y* (tambah lagi) atau *N* (selesai).',
-            });
-            return true;
-        }
-
-        if (answer === 'Y') {
-            const { stepCounter } = session.data;
-
+        // Cek apakah masih ada step yang harus dibuat
+        if (stepsCreated < totalSteps) {
             updateAdminSession(jid, {
                 step: 'BUILD_STEP_TEXT',
-                data: { ...session.data },
+                data: { ...session.data, stepsCreated, stepCounter: nextStep, currentStepText: undefined, currentStepType: undefined },
             });
 
             let reply = '🔨 *WIZARD: BUAT PERTANYAAN*\n';
-            reply += `📍 _Pertanyaan #${stepCounter}_\n`;
             reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-            reply += '📝 Ketik teks pertanyaan yang akan dikirim bot ke warga.\n\n';
-            reply += '_Contoh: Jelaskan kondisi kerusakannya_\n\n';
-            reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-            reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+            reply += `✅ *Pertanyaan #${stepCounter} berhasil disimpan!*\n`;
+            reply += `📝 _"${truncateText(currentStepText, 40)}"_ | ${typeLabels[currentStepType]} | ${isRequired ? 'Wajib' : 'Opsional'}\n\n`;
+            reply += `📊 _Progress: ${stepsCreated}/${totalSteps} pertanyaan_\n\n`;
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += `📝 *Pertanyaan #${nextStep} dari ${totalSteps}*\n`;
+            reply += 'Ketik teks pertanyaan berikutnya.\n\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n🛑 _Ketik /cancel untuk membatalkan_';
             await sock.sendMessage(jid, { text: reply });
-            return true;
+        } else {
+            // Semua step sudah dibuat → selesai
+            const { flowKeyword } = session.data;
+
+            let reply = '🎉 *MENU LAYANAN BERHASIL DIBUAT!*\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += `📋 *Menu:* ${flowTitle}\n`;
+            reply += `🔑 *Keyword:* \`${flowKeyword}\`\n`;
+            reply += `📝 *Jumlah Pertanyaan:* ${stepsCreated}\n`;
+            reply += `📌 *Tipe:* Pengecekan (Warga Input)\n\n`;
+            reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += '_Menu sudah aktif dan siap digunakan!_\n';
+            reply += '_Ketik /setting untuk mengedit teks pesan._\n';
+            reply += '_Ketik /buildmenu untuk membuat menu baru lainnya._';
+            await sock.sendMessage(jid, { text: reply });
+            endAdminSession(jid);
         }
+        return true;
+    }
 
-        // answer === 'N' → Selesai
-        const { flowTitle, flowKeyword, stepsCreated } = session.data;
 
-        let reply = '🎉 *MENU LAYANAN BERHASIL DIBUAT!*\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `📋 *Menu:* ${flowTitle}\n`;
-        reply += `🔑 *Keyword:* \`${flowKeyword}\`\n`;
-        reply += `📝 *Jumlah Pertanyaan:* ${stepsCreated}\n\n`;
-        reply += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += '_Menu sudah aktif dan siap digunakan!_\n';
-        reply += '_Ketik /setting untuk mengedit teks pesan._\n';
-        reply += '_Ketik /buildmenu untuk membuat menu baru lainnya._';
-
-        await sock.sendMessage(jid, { text: reply });
-        endAdminSession(jid);
+    // Safety net: jika session aktif tapi tidak ada step yang cocok,
+    // TETAP return true agar tidak jatuh ke wargaController ("gangguan")
+    if (session) {
+        console.warn(`[ADMIN_CTRL] Session aktif tapi step "${session.step}" tidak tertangani. JID: ${jid}`);
         return true;
     }
 

@@ -15,7 +15,7 @@ const registerRoutes = (sock) => {
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
 
-                if (isStaleMessage(msg, 60)) {
+                if (isStaleMessage(msg, 120)) {
                     console.log(`[ANTI-SPAM] Membuang pesan basi dari: ${jid}`);
                     continue;
                 }
