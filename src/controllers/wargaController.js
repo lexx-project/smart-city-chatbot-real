@@ -10,7 +10,7 @@ const {
 } = require("../services/adminService");
 const {
   getMainMenu,
-  getStepById,
+  getStep,
   getBotSettings,
   submitTicket,
   getOrCreateUser,
@@ -111,7 +111,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   }
 
   // KONDISI 2: VALIDASI INPUT & SIMPAN DATA JAWABAN
-  const rawCurrent = await getStepById(session.currentStepId);
+  const rawCurrent = await getStep(session.currentStepId);
   const currentStep = rawCurrent?.data || rawCurrent;
 
   if (!currentStep) {
@@ -233,7 +233,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   }
 
   // KONDISI 3: KIRIM STEP SELANJUTNYA
-  const rawNext = await getStepById(nextStepId);
+  const rawNext = await getStep(nextStepId);
   const nextStep = rawNext?.data || rawNext;
 
   if (!nextStep) {

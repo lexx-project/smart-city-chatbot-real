@@ -27,29 +27,27 @@ const getBotSettings = async () => {
 const getMainMenu = async () => {
     try {
         const token = await getAdminToken();
-
-        // 1. Ambil daftar Flow
-        const flowRes = await nestClient.get('/cms/bot-flow/flows', {
+        const res = await nestClient.get('/cms/bot-flow/flows', {
             headers: { Authorization: `Bearer ${token}` }
         });
-        const flows = flowRes.data?.data || [];
+
+        const flows = res.data?.data || [];
         if (flows.length === 0) return null;
 
-        // 2. Ambil detail Flow pertama (Main Menu) biar dapet list 'steps'-nya
-        const detailRes = await nestClient.get(`/cms/bot-flow/flows/${flows[0].id}`, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
-        const mainFlow = detailRes.data?.data || detailRes.data;
-
+        // Construct the Root Menu manually, using the flows as children
         return {
-            id: mainFlow.id,
+            id: 'root_menu',
             stepKey: 'main_menu',
-            messages: [{ messageText: mainFlow.description || 'Silakan pilih layanan berikut:' }],
-            children: mainFlow.steps ? mainFlow.steps.map(step => ({
-                id: step.id,
-                stepOrder: step.stepOrder,
-                stepKey: step.name || step.stepKey
-            })) : []
+            messages: [{ messageText: 'Halo! 👋 Selamat datang di Layanan Publik Pintar.\n\nSilakan pilih layanan berikut:' }],
+            children: flows.map((flow, index) => {
+                // Cari step pertama dari flow ini (yang stepOrder-nya 1)
+                const firstStep = flow.steps?.find(s => s.stepOrder === 1) || flow.steps?.[0];
+                return {
+                    id: firstStep ? firstStep.id : flow.id, // Arahkan ke step pertama
+                    stepOrder: index + 1,
+                    stepKey: flow.flowName // Tampilkan nama flow sebagai opsi menu
+                };
+            })
         };
     } catch (error) {
         console.error('[BOT_FLOW] Gagal mengambil Flow CMS:', error.message);
@@ -57,21 +55,26 @@ const getMainMenu = async () => {
     }
 };
 
-const getStepById = async (id) => {
+const getStep = async (stepIdOrKey) => {
     try {
+        // Return main menu if root is requested
+        if (stepIdOrKey === 'root_menu') return await getMainMenu();
+
         const token = await getAdminToken();
-        // Ambil semua steps, lalu cari berdasarkan ID karena endpoint GET /{id} tidak tersedia di Swagger
         const res = await nestClient.get('/cms/bot-flow/steps', {
             headers: { Authorization: `Bearer ${token}` },
-            params: { limit: 200 } // Pastikan cukup besar untuk mengambil semua steps
+            params: { limit: 200 }
         });
 
         const steps = res.data?.data || [];
-        const step = steps.find(s => s.id === id);
+
+        // Backend menggunakan nextStepKey (string) untuk pindah step, 
+        // jadi kita harus mencari berdasarkan id ATAU stepKey
+        const step = steps.find(s => s.id === stepIdOrKey || s.stepKey === stepIdOrKey);
 
         return step || null;
     } catch (error) {
-        console.error(`[BOT_FLOW] Gagal mengambil Step CMS ${id}:`, error.message);
+        console.error(`[BOT_FLOW] Gagal mengambil Step ${stepIdOrKey}:`, error.message);
         return null;
     }
 };
@@ -233,4 +236,4 @@ const createCmsStep = async (payload) => {
     }
 };
 
-module.exports = { getMainMenu, getStepById, getBotSettings, submitTicket, getCategoryIdFromFlow, getOrCreateUser, getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep };
+module.exports = { getMainMenu, getStep, getBotSettings, submitTicket, getCategoryIdFromFlow, getOrCreateUser, getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep };
