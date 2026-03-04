@@ -1,5 +1,6 @@
-const { SUPERADMIN_JID } = require('../../settings');
-const nestClient = require('../api/nestClient');
+const fs = require('fs');
+const path = require('path');
+const { SUPERADMIN_JID, SESSION_DIR } = require('../../settings');
 const { jidLocal, resolveLidFromPhone, resolvePhoneFromLid, buildActorTokens } = require('./lidService');
 
 const runtimeAdminOverrides = new Set();
@@ -54,21 +55,13 @@ const getAdminSettings = async () => {
     }
 };
 
-const getBotAdmins = async () => {
-    try {
-        const response = await nestClient.get('/bot-admins');
-        const payload = response?.data;
-        const rows = Array.isArray(payload) ? payload : [];
-        return rows.map(extractAdminCandidate).filter(Boolean);
-    } catch (error) {
-        console.error('[BOT_ADMINS_ERROR] Gagal mengambil daftar admin:', error?.message);
-        return [];
-    }
+const getBotAdmins = () => {
+    return [];
 };
 
-const listAdminJids = async () => {
-    const fromApi = await getBotAdmins();
-    return Array.from(new Set([SUPERADMIN_JID, ...fromApi, ...runtimeAdminOverrides].filter(Boolean)));
+const listAdminJids = () => {
+    const fromStatic = getBotAdmins();
+    return Array.from(new Set([SUPERADMIN_JID, ...fromStatic, ...runtimeAdminOverrides].filter(Boolean)));
 };
 
 const addAdminJid = async (targetJid) => {
@@ -97,30 +90,45 @@ const removeAdminJid = async (candidate) => {
         }
     }
 
-    return { removed, remaining: await listAdminJids() };
+    return { removed, remaining: listAdminJids() };
 };
 
-const isAdminJid = async (sock, jid, pushName) => {
+const isAdminJid = (sock, jid, pushName) => {
     if (!jid) return false;
 
-    const admins = await listAdminJids();
-    const actorTokens = await buildActorTokens(jid);
+    const admins = listAdminJids();
+    const actorTokens = new Set();
 
     const local = jidLocal(jid);
-    if (jid.endsWith('@s.whatsapp.net') && local) {
-        const lid = await resolveLidFromPhone(local);
-        if (lid) {
-            actorTokens.add(lid);
-            actorTokens.add(`${lid}@lid`);
-        }
-    }
+    if (local) actorTokens.add(local);
+    actorTokens.add(jid);
 
-    if (jid.endsWith('@lid') && local) {
-        const phone = await resolvePhoneFromLid(local);
-        if (phone) {
-            actorTokens.add(phone);
-            actorTokens.add(`${phone}@s.whatsapp.net`);
+    try {
+        if (jid.endsWith('@s.whatsapp.net') && local) {
+            const directPath = path.join(SESSION_DIR, `lid-mapping-${local}.json`);
+            if (fs.existsSync(directPath)) {
+                const mapped = JSON.parse(fs.readFileSync(directPath, 'utf8'));
+                const lid = String(mapped || '').replace(/\D/g, '');
+                if (lid) {
+                    actorTokens.add(lid);
+                    actorTokens.add(`${lid}@lid`);
+                }
+            }
         }
+
+        if (jid.endsWith('@lid') && local) {
+            const reversePath = path.join(SESSION_DIR, `lid-mapping-${local}_reverse.json`);
+            if (fs.existsSync(reversePath)) {
+                const mapped = JSON.parse(fs.readFileSync(reversePath, 'utf8'));
+                const phone = String(mapped || '').replace(/\D/g, '');
+                if (phone) {
+                    actorTokens.add(phone);
+                    actorTokens.add(`${phone}@s.whatsapp.net`);
+                }
+            }
+        }
+    } catch (e) {
+        // Abaikan error baca file
     }
 
     // Placeholder untuk kemungkinan auto-sync berbasis sock/pushName di masa depan.

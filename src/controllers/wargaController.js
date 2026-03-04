@@ -70,14 +70,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   if (!jid) return false;
 
   const pushName = msg.pushName || "Warga";
-  const [isAdmin, adminSettings] = await Promise.all([
-    isAdminJid(sock, jid, pushName),
-    getAdminSettings(),
-  ]);
+  const isAdmin = isAdminJid(sock, jid, pushName);
+  const adminSettings = await getAdminSettings();
 
-  // Admin TIDAK boleh diproses oleh wargaController sama sekali
-  // Semua pesan admin harus ditangani oleh adminController
-  if (isAdmin) return false;
+  // Jika admin mengirim pesan menggunakan prefix '/' (command), biarkan adminController yang menangani.
+  if (isAdmin && bodyText.startsWith("/")) return false;
 
   const normalizedText = String(bodyText || "").trim();
   if (!normalizedText) return;
@@ -90,9 +87,12 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     const mainMenu = rawMenu?.data || rawMenu;
 
     if (!mainMenu || !mainMenu.id) {
-      await sock.sendMessage(jid, {
-        text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
-      });
+      console.error("[WARGA CONTROLLER] API Error: getMainMenu returned null or invalid.");
+      if (!isAdmin) {
+        await sock.sendMessage(jid, {
+          text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
+        });
+      }
       return true;
     }
 
