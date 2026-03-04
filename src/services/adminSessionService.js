@@ -13,41 +13,32 @@ const saveSession = (sessions) => fs.writeFileSync(SESSION_FILE, JSON.stringify(
 
 const loginStaffWa = async (jid, email, password) => {
     try {
-        // Use relative path 'auth/staff/login' as nestClient already has baseURL with /api/v1/
         const res = await nestClient.post('auth/staff/login', { email, password });
         const data = res.data?.data || res.data;
-
-        if (data && data.accessToken) {
+        if (data?.accessToken) {
             const sessions = loadSessions();
             sessions[jid] = {
                 id: data.id,
-                email: data.email,
-                role: (data.role?.name || data.role || 'STAFF').toUpperCase(),
-                name: data.fullName || data.name || 'Admin',
+                name: data.fullName || data.name,
+                role: (data.role?.name || data.role || 'ADMIN').toUpperCase(),
                 token: data.accessToken
             };
             saveSession(sessions);
             return { success: true, name: sessions[jid].name, role: sessions[jid].role };
         }
-        return { success: false, message: 'Gagal mendapatkan data user.' };
+        return { success: false, message: 'Token tidak ditemukan.' };
     } catch (error) {
-        return { success: false, message: error.response?.data?.message || 'Koneksi API Gagal.' };
+        return { success: false, message: error.response?.data?.message || 'Login Gagal.' };
     }
 };
 
-const getAuthenticatedStaff = (jid) => {
-    const sessions = loadSessions();
-    return sessions[jid] || null;
-};
+const getAuthenticatedStaff = (jid) => loadSessions()[jid] || null;
 
-// Keep existing adminSession functions for wizard steps compatibility
+// Preserve existing wizard session functions
 const adminSessions = {};
 const startAdminSession = (jid) => { adminSessions[jid] = { step: 'SELECT_CATEGORY', data: {} }; return adminSessions[jid]; };
 const updateAdminSession = (jid, patch) => { if (adminSessions[jid]) adminSessions[jid] = { ...adminSessions[jid], ...patch }; return adminSessions[jid]; };
 const getAdminSession = (jid) => adminSessions[jid] || null;
 const endAdminSession = (jid) => { if (adminSessions[jid]) delete adminSessions[jid]; };
 
-module.exports = {
-    loginStaffWa, getAuthenticatedStaff,
-    startAdminSession, updateAdminSession, getAdminSession, endAdminSession
-};
+module.exports = { loginStaffWa, getAuthenticatedStaff, startAdminSession, updateAdminSession, getAdminSession, endAdminSession };

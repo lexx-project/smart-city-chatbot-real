@@ -65,7 +65,7 @@ const registerRoutes = (sock) => {
 
                 // 2. Identify Admin Status from Session
                 const staff = getAuthenticatedStaff(jid);
-                const isAdmin = staff && staff.role && staff.role.includes('ADMIN');
+                const isAdmin = staff && staff.role.includes('ADMIN');
                 const isSuperOrAdmin = isAdmin;
 
                 // ── TICKET COMMAND (/tiket or /tiket <status>) ──
