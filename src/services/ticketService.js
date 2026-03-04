@@ -101,4 +101,15 @@ const assignTicket = async (ticketId, assignedTo, assignedBy) => {
     return response.data;
 };
 
-module.exports = { getTickets, getTicketById, updateTicketStatus, getStaffList, assignTicket, getAdminUserId };
+/**
+ * POST /api/v1/tickets/:id/attachments
+ * @param {string} ticketId - UUID of the ticket
+ * @param {Object} payload - { fileUrl, fileType }
+ */
+const addTicketAttachment = async (ticketId, payload) => {
+    const headers = await authHeader();
+    const response = await nestClient.post(`/tickets/${ticketId}/attachments`, payload, { headers });
+    return response.data;
+};
+
+module.exports = { getTickets, getTicketById, updateTicketStatus, getStaffList, assignTicket, getAdminUserId, addTicketAttachment };

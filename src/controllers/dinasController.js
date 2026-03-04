@@ -2,11 +2,12 @@
 
 /**
  * dinasController.js
- * Handles the /tugasku command for assigned staff (Dinas) to manage their tasks
  * and notify the admin of status updates.
  */
 
-const { getStaffList, getTickets, updateTicketStatus } = require('../services/ticketService');
+const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+
+const { getStaffList, getTickets, updateTicketStatus, addTicketAttachment } = require('../services/ticketService');
 const {
     startAdminSession,
     getAdminSession,
@@ -274,6 +275,17 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
         const { selectedTask, me } = session.data;
         const { id: ticketId, ticketNumber, ticket } = selectedTask;
 
+        if (newStatus === 'RESOLVED') {
+            updateAdminSession(jid, {
+                step: 'WAITING_RESOLUTION_EVIDENCE',
+                data: session.data,
+            });
+            await sock.sendMessage(jid, {
+                text: "📸 *Upload Bukti Penyelesaian*\n-------------------------\nMohon kirimkan FOTO bukti penyelesaian tugas ini langsung di chat ini.\n\n_Ketik /cancel untuk membatalkan._"
+            });
+            return;
+        }
+
         await sock.sendMessage(jid, { text: 'Memproses pembaruan status. Mohon tunggu.' });
 
         try {
@@ -322,6 +334,56 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
         } catch (notifErr) {
             console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
             // Best-effort — don't abort
+        }
+        return;
+    }
+
+    // ── WAITING_RESOLUTION_EVIDENCE ───────────────────────
+    if (session.step === 'WAITING_RESOLUTION_EVIDENCE') {
+        if (text === '/cancel' || text === '0') {
+            endAdminSession(jid);
+            await sock.sendMessage(jid, { text: 'Pengiriman bukti dibatalkan. Status tiket tidak diubah.' });
+            return;
+        }
+
+        const hasImage = msg.message?.imageMessage || msg.message?.ephemeralMessage?.message?.imageMessage;
+        if (!hasImage) {
+            await sock.sendMessage(jid, { text: 'Mohon kirimkan dalam format FOTO (gambar). Bukti teks tidak diterima.' });
+            return;
+        }
+
+        await sock.sendMessage(jid, { text: 'Mengunduh foto dan memproses pembaruan tiket. Mohon tunggu...' });
+
+        try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console });
+
+            const { selectedTask, me } = session.data;
+            const { id: ticketId, ticketNumber, ticket } = selectedTask;
+
+            await updateTicketStatus(ticketId, 'RESOLVED');
+
+            const staffName = me.name || me.fullName || 'Petugas';
+            const tid = ticketNumber || ticketId || ticket?.ticketNumber || 'TKT';
+
+            endAdminSession(jid);
+            await sock.sendMessage(jid, { text: `✅ Bukti foto berhasil diterima. Tiket ${tid} telah ditandai SELESAI. Terima kasih atas kerja keras Anda!` });
+
+            try {
+                const adminMsg = `✅ *Tugas Selesai!*\n-------------------------\nPetugas: ${staffName}\nTiket: ${tid}\nStatus: RESOLVED\n\nBerikut adalah foto bukti pengerjaan dari lapangan:`;
+                const adminJid = listAdminJids()[0];
+                if (adminJid) {
+                    await sock.sendMessage(adminJid, {
+                        image: buffer,
+                        caption: adminMsg
+                    });
+                }
+                console.log(`${PID} [DINAS] Admin notified with image buffer for resolved ticket | adminJid=${listAdminJids()[0]}`);
+            } catch (notifErr) {
+                console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
+            }
+        } catch (err) {
+            console.error(`${PID} [DINAS] Evidence upload error:`, err?.response?.data || err?.message);
+            await sock.sendMessage(jid, { text: 'Terjadi kesalahan saat memproses bukti foto. Silakan coba kembali.' });
         }
         return;
     }
