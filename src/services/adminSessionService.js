@@ -1,64 +1,47 @@
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-const { NEST_API_BASE_URL } = require('../../settings');
+const { nestClient } = require('../api/nestClient');
 
 const SESSION_FILE = path.join(__dirname, '../../wa_staff_sessions.json');
-const adminSessions = {};
 
-// Load sessions on startup
-let authenticatedStaff = {};
-if (fs.existsSync(SESSION_FILE)) {
-    try {
-        authenticatedStaff = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-    } catch (err) {
-        console.error('[ADMIN_SESSION] Error reading staff sessions file:', err.message);
-    }
-}
-
-const saveStaffSessions = () => {
-    try {
-        fs.writeFileSync(SESSION_FILE, JSON.stringify(authenticatedStaff, null, 2));
-    } catch (err) {
-        console.error('[ADMIN_SESSION] Error writing staff sessions file:', err.message);
-    }
+const loadSessions = () => {
+    if (fs.existsSync(SESSION_FILE)) return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    return {};
 };
 
-const loginStaff = async (jid, email, password) => {
+const saveSession = (sessions) => fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions, null, 2));
+
+const loginStaffWa = async (jid, email, password) => {
     try {
-        const res = await axios.post(`${NEST_API_BASE_URL}/auth/staff/login`, {
-            email,
-            password
-        });
-
+        // Gunakan path relatif 'auth/staff/login' karena baseURL sudah ada api/v1/
+        const res = await nestClient.post('auth/staff/login', { email, password });
         const data = res.data?.data || res.data;
-        const staffRaw = data.staff || {};
 
-        const loginData = {
-            id: staffRaw.id,
-            email: staffRaw.email,
-            name: staffRaw.fullName || staffRaw.name,
-            role: staffRaw.role?.name || staffRaw.role,
-            accessToken: data.accessToken || data.access_token || data.token,
-            updatedAt: new Date().toISOString()
-        };
-
-        authenticatedStaff[jid] = loginData;
-        saveStaffSessions();
-
-        return { success: true, data: loginData };
+        if (data && data.accessToken) {
+            const sessions = loadSessions();
+            sessions[jid] = {
+                id: data.id,
+                email: data.email,
+                role: data.role?.name || data.role,
+                name: data.fullName || data.name,
+                accessToken: data.accessToken
+            };
+            saveSession(sessions);
+            return { success: true, name: sessions[jid].name, role: sessions[jid].role };
+        }
+        return { success: false, message: 'Gagal mendapatkan token.' };
     } catch (error) {
-        return {
-            success: false,
-            message: error.response?.data?.message || error.message
-        };
+        return { success: false, message: error.response?.data?.message || 'Gagal terhubung ke server.' };
     }
 };
 
 const getAuthenticatedStaff = (jid) => {
-    return authenticatedStaff[jid] || null;
+    const sessions = loadSessions();
+    return sessions[jid] || null;
 };
 
+
+const adminSessions = {};
 
 const startAdminSession = (jid) => {
     adminSessions[jid] = { step: 'SELECT_CATEGORY', data: {} };
@@ -78,4 +61,4 @@ const endAdminSession = (jid) => {
     if (adminSessions[jid]) delete adminSessions[jid];
 };
 
-module.exports = { startAdminSession, updateAdminSession, getAdminSession, endAdminSession, loginStaff, getAuthenticatedStaff };
+module.exports = { startAdminSession, updateAdminSession, getAdminSession, endAdminSession, loginStaffWa, getAuthenticatedStaff };
