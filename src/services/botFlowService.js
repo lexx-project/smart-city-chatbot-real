@@ -63,7 +63,7 @@ const getStep = async (stepIdOrKey) => {
         const token = await getAdminToken();
         const res = await nestClient.get('/cms/bot-flow/steps', {
             headers: { Authorization: `Bearer ${token}` },
-            params: { limit: 200 }
+            params: { limit: 100 }
         });
 
         const steps = res.data?.data || [];

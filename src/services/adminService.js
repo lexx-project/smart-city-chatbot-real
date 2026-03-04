@@ -73,20 +73,30 @@ const ADMIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const fetchBotAdmins = async () => {
     try {
         const token = await getAdminToken();
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await nestClient.get('/bot-admins', { headers });
+        const res = await nestClient.get('/staff', {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { limit: 100 }
+        });
 
-        const raw = Array.isArray(res.data) ? res.data
-            : Array.isArray(res.data?.data) ? res.data.data
-                : [];
+        const staffList = res.data?.data || [];
 
-        const jids = raw
-            .map(item => extractAdminCandidate(item))
-            .filter(Boolean);
+        // Ambil nomor WA staff yang role-nya ADMIN / Super Admin
+        const adminPhones = staffList
+            .filter(staff => staff.role?.name?.toUpperCase().includes('ADMIN') || staff.role === 'ADMIN')
+            .map(staff => staff.phoneNumber || staff.phone)
+            .filter(Boolean); // Buang yang kosong
 
-        cachedAdmins = jids;
+        if (adminPhones.length === 0) {
+            cachedAdmins = ['62882009391607'];
+        } else {
+            const jids = adminPhones
+                .map(item => extractAdminCandidate(item))
+                .filter(Boolean);
+            cachedAdmins = jids;
+        }
+
         lastAdminFetchTime = Date.now();
-        console.log(`[ADMIN_CACHE] Refreshed — ${jids.length} admin(s) loaded.`);
+        console.log(`[ADMIN_CACHE] Refreshed — ${cachedAdmins.length} admin(s) loaded from /staff.`);
     } catch (err) {
         console.error('[ADMIN_CACHE] fetchBotAdmins failed:', err?.message);
         if (!cachedAdmins || cachedAdmins.length === 0) {
