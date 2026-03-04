@@ -50,4 +50,36 @@ nestClient.interceptors.response.use(
   },
 );
 
-module.exports = nestClient;
+// ==========================================
+// TICKET API WRAPPERS
+// ==========================================
+
+/**
+ * GET /api/v1/tickets
+ * @param {{ status?: string, limit?: number }} params
+ */
+const getTickets = async (params = {}) => {
+  const response = await nestClient.get('tickets', { params });
+  return response.data;
+};
+
+/**
+ * GET /api/v1/tickets/:id
+ * @param {string} id - UUID of the ticket
+ */
+const getTicketById = async (id) => {
+  const response = await nestClient.get(`tickets/${id}`);
+  return response.data;
+};
+
+/**
+ * PATCH /api/v1/tickets/:id/status
+ * @param {string} id - UUID of the ticket
+ * @param {string} status - 'IN_PROGRESS' | 'RESOLVED' | 'REJECTED'
+ */
+const updateTicketStatus = async (id, status) => {
+  const response = await nestClient.patch(`tickets/${id}/status`, { status });
+  return response.data;
+};
+
+module.exports = { nestClient, getTickets, getTicketById, updateTicketStatus };

@@ -1,9 +1,12 @@
 const { handleAdminMessage } = require('../controllers/adminController');
 const { handleWargaMessage } = require('../controllers/wargaController');
+const { handleTicketCommand, handleTicketSession } = require('../controllers/ticketController');
+const { handleCekTugasCommand, handleCekTugasSession } = require('../controllers/tugasController');
 const { logIncomingChat } = require('../utils/logger');
 const { extractBodyText, shouldSkipMessage, isStaleMessage } = require('../middlewares/messageMiddleware');
 const { isAdminJid } = require('../services/adminService');
 const { getAdminSession } = require('../services/adminSessionService');
+
 
 // ═══════════════════════════════════════════════════════
 //  GLOBAL MESSAGE LOCKING — Mencegah double-processing
@@ -25,6 +28,7 @@ const registerRoutes = (sock) => {
                 setTimeout(() => processedMessageIds.delete(msgId), 5_000);
             }
 
+
             let handledByAdmin = false;
 
             try {
@@ -41,12 +45,56 @@ const registerRoutes = (sock) => {
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
 
-                // ── ADMIN FLOW ──
+                const isAdmin = isAdminJid(sock, jid, msg.pushName);
+
+                // ── TICKET COMMAND (/tiket or /tiket <status>) ──
+                // Must run BEFORE handleAdminMessage so the ticket session
+                // is never intercepted by adminController.
+                if (isAdmin && (bodyText === '/tiket' || bodyText.toLowerCase().startsWith('/tiket '))) {
+                    console.log(`[PID:${process.pid}] [ROUTER] /tiket command from admin ${jid}`);
+                    await handleTicketCommand(sock, msg, jid, bodyText);
+                    handledByAdmin = true;
+                    continue;
+                }
+
+                // ── CEKTUGAS COMMAND (/cektugas) ──
+                if (isAdmin && bodyText.toLowerCase().startsWith('/cektugas')) {
+                    console.log(`[PID:${process.pid}] [ROUTER] /cektugas command from admin ${jid}`);
+                    await handleCekTugasCommand(sock, msg, jid);
+                    handledByAdmin = true;
+                    continue;
+                }
+
+                // ── TICKET SESSION REPLIES (TICKET_FLOW) ──
+                // Check step prefix so this catches WAITING_TICKET_* and WAITING_STATUS_* states.
+                const ticketSession = getAdminSession(jid);
+                if (isAdmin && ticketSession && (
+                    ticketSession.step === 'SELECT_TICKET_STATUS' ||
+                    ticketSession.step.startsWith('WAITING_TICKET_') ||
+                    ticketSession.step.startsWith('WAITING_STATUS_') ||
+                    ticketSession.step === 'WAITING_ASSIGN_CHOICE' ||
+                    ticketSession.type === 'TICKET_FLOW'
+                )) {
+                    console.log(`[PID:${process.pid}] [ROUTER] Ticket session reply | jid=${jid} | step=${ticketSession.step}`);
+                    await handleTicketSession(sock, msg, jid, bodyText, ticketSession);
+                    handledByAdmin = true;
+                    continue;
+                }
+
+                // ── CEKTUGAS SESSION REPLIES (CEK_TUGAS_FLOW) ──
+                if (isAdmin && ticketSession?.type === 'CEK_TUGAS_FLOW') {
+                    console.log(`[PID:${process.pid}] [ROUTER] CekTugas session | jid=${jid} | step=${ticketSession.step}`);
+                    await handleCekTugasSession(sock, msg, jid, bodyText, ticketSession);
+                    handledByAdmin = true;
+                    continue;
+                }
+
+                // ── ADMIN FLOW (CMS, buildmenu, etc.) ──
                 handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
                 if (handledByAdmin) continue;
 
                 // ── ADMIN SESSION GUARD ──
-                // Jika admin punya sesi aktif, JANGAN teruskan ke wargaController
+                // Jika admin punya sesi aktif (CMS, buildmenu, dll.), JANGAN teruskan ke wargaController
                 const adminSession = getAdminSession(jid);
                 if (adminSession) {
                     console.log(`[ROUTER] Admin ${jid} punya sesi aktif (step: ${adminSession.step}), skip wargaController`);
@@ -57,6 +105,7 @@ const registerRoutes = (sock) => {
                 logIncomingChat(msg, 'WARGA');
 
                 await handleWargaMessage(sock, msg, bodyText);
+
             } catch (error) {
                 console.error('[ROUTER_MESSAGE_ERROR]', error);
                 // Jika error terjadi di flow admin, JANGAN trigger apapun

@@ -13,7 +13,10 @@ const {
   getMainMenu,
   getStepById,
   submitTicket,
+  getOrCreateUser,
+  getCategoryIdFromFlow,
 } = require("../services/botFlowService");
+
 
 // Validator Engine
 const validateInput = (text, inputType, rule) => {
@@ -150,23 +153,55 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       text: "⏳ _Laporan/Data Anda sedang kami proses..._",
     });
 
+    const phone = extractPhoneDigits(jid);
+    const flowId = currentStep.flowId || null;
+
+    // Resolve userId dan categoryId secara paralel
+    const [userId, categoryId] = await Promise.all([
+      getOrCreateUser(phone, pushName),
+      getCategoryIdFromFlow(flowId),
+    ]);
+
+    if (!userId) {
+      console.error('[WARGA_CTRL] Gagal mendapatkan userId. Tiket tidak dikirim.');
+      await sock.sendMessage(jid, {
+        text: "❌ Maaf, sistem gagal mengidentifikasi akun Anda. Silakan coba lagi dalam beberapa saat.",
+      });
+      endSession(jid);
+      return true;
+    }
+
+    if (!categoryId) {
+      console.error('[WARGA_CTRL] Gagal mendapatkan categoryId. Tiket tidak dikirim.');
+      await sock.sendMessage(jid, {
+        text: "❌ Maaf, kategori laporan tidak ditemukan. Silakan coba mulai ulang.",
+      });
+      endSession(jid);
+      return true;
+    }
+
     const ticketPayload = {
-      reporterPhone: extractPhoneDigits(jid),
-      reporterName: pushName,
-      source: "whatsapp",
-      // Simpan flowId jika ada
-      flowId: currentStep.flowId || null,
-      // Konversi jawaban menjadi format JSON string untuk deskripsi
       description: JSON.stringify(session.answers, null, 2),
+      userId,
+      categoryId,
     };
 
+    console.log('[WARGA_CTRL] Mengirim tiket:', JSON.stringify(ticketPayload));
+
     // Fire and forget ke Backend
-    await submitTicket(ticketPayload);
+    const result = await submitTicket(ticketPayload);
 
     const closingMsg =
       adminSettings.SESSION_END_TEXT ||
       "Terima kasih, laporan/data Anda telah berhasil dicatat ke dalam sistem.";
-    await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
+
+    if (result) {
+      await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
+    } else {
+      await sock.sendMessage(jid, {
+        text: "⚠️ Laporan diterima, namun terjadi kendala saat menyimpan ke sistem. Tim kami akan menindaklanjuti.",
+      });
+    }
 
     endSession(jid);
     return true;
