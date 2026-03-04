@@ -2,9 +2,10 @@ const { handleAdminMessage } = require('../controllers/adminController');
 const { handleWargaMessage } = require('../controllers/wargaController');
 const { handleTicketCommand, handleTicketSession } = require('../controllers/ticketController');
 const { handleCekTugasCommand, handleCekTugasSession } = require('../controllers/tugasController');
+const { handleTugaskuCommand, handleTugaskuSession } = require('../controllers/dinasController');
 const { logIncomingChat } = require('../utils/logger');
 const { extractBodyText, shouldSkipMessage, isStaleMessage } = require('../middlewares/messageMiddleware');
-const { isAdminJid } = require('../services/adminService');
+const { checkIsAdmin } = require('../services/adminService');
 const { getAdminSession } = require('../services/adminSessionService');
 
 
@@ -45,7 +46,7 @@ const registerRoutes = (sock) => {
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
 
-                const isAdmin = isAdminJid(sock, jid, msg.pushName);
+                const isAdmin = await checkIsAdmin(jid);
 
                 // ── TICKET COMMAND (/tiket or /tiket <status>) ──
                 // Must run BEFORE handleAdminMessage so the ticket session
@@ -65,9 +66,26 @@ const registerRoutes = (sock) => {
                     continue;
                 }
 
+                // ── TUGASKU COMMAND (/tugasku) ── Dinas/Staff only, no admin check
+                if (bodyText.toLowerCase().startsWith('/tugasku')) {
+                    console.log(`[PID:${process.pid}] [ROUTER] /tugasku command | jid=${jid}`);
+                    await handleTugaskuCommand(sock, msg, jid);
+                    handledByAdmin = true; // prevent fall-through to warga
+                    continue;
+                }
+
+                // ── DINAS SESSION REPLIES (DINAS_FLOW) ──
+                const anySession = getAdminSession(jid);
+                if (anySession?.type === 'DINAS_FLOW') {
+                    console.log(`[PID:${process.pid}] [ROUTER] Dinas session | jid=${jid} | step=${anySession.step}`);
+                    await handleTugaskuSession(sock, msg, jid, bodyText, anySession);
+                    handledByAdmin = true;
+                    continue;
+                }
+
                 // ── TICKET SESSION REPLIES (TICKET_FLOW) ──
                 // Check step prefix so this catches WAITING_TICKET_* and WAITING_STATUS_* states.
-                const ticketSession = getAdminSession(jid);
+                const ticketSession = anySession; // reuse — already fetched above
                 if (isAdmin && ticketSession && (
                     ticketSession.step === 'SELECT_TICKET_STATUS' ||
                     ticketSession.step.startsWith('WAITING_TICKET_') ||

@@ -13,7 +13,6 @@ module.exports = {
     SESSION_DIR: SESSION_PATH,
 
     // Admin access
-    SUPERADMIN_JID: process.env.SUPERADMIN_JID || '62882009391607@s.whatsapp.net',
     ADMIN_FLOW_TIMEOUT_MS: toNumber(process.env.ADMIN_FLOW_TIMEOUT_MS, 60 * 1000),
 
     // Warga flow timeout behavior

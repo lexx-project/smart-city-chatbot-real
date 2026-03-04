@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const { SUPERADMIN_JID, SESSION_DIR } = require('../../settings');
+const { SESSION_DIR } = require('../../settings');
 const { jidLocal, resolveLidFromPhone, resolvePhoneFromLid, buildActorTokens } = require('./lidService');
+const { nestClient } = require('../api/nestClient');
+const { getAdminToken } = require('./adminAuthService');
 
 const runtimeAdminOverrides = new Set();
 
@@ -55,13 +57,88 @@ const getAdminSettings = async () => {
     }
 };
 
-const getBotAdmins = () => {
-    return [];
+// ══════════════════════════════════════════════════════════
+//  DYNAMIC ADMIN CACHE
+// ══════════════════════════════════════════════════════════
+
+let cachedAdmins = null;         // array of JID strings once populated
+let lastAdminFetchTime = 0;
+const ADMIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fetch authorized bot-admin JIDs from the backend.
+ * Converts phone formats (e.g. '08xxx' or '628xxx') to WhatsApp JIDs.
+ * Falls back to SUPERADMIN_JID on API failure.
+ */
+const fetchBotAdmins = async () => {
+    try {
+        const token = await getAdminToken();
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await nestClient.get('/bot-admins', { headers });
+
+        const raw = Array.isArray(res.data) ? res.data
+            : Array.isArray(res.data?.data) ? res.data.data
+                : [];
+
+        const jids = raw
+            .map(item => extractAdminCandidate(item))
+            .filter(Boolean);
+
+        cachedAdmins = jids;
+        lastAdminFetchTime = Date.now();
+        console.log(`[ADMIN_CACHE] Refreshed — ${jids.length} admin(s) loaded.`);
+    } catch (err) {
+        console.error('[ADMIN_CACHE] fetchBotAdmins failed:', err?.message);
+        // Keep existing cache; fall back to SUPERADMIN only if empty
+        if (!cachedAdmins) cachedAdmins = [];
+    }
+    return cachedAdmins;
+};
+
+/**
+ * Async admin check — resolves LIDs and compares against cached admin list.
+ */
+const checkIsAdmin = async (jid) => {
+    if (!jid) return false;
+
+    // Refresh cache if stale or missing
+    if (!cachedAdmins || Date.now() - lastAdminFetchTime > ADMIN_CACHE_TTL) {
+        await fetchBotAdmins();
+    }
+
+    // Build actor tokens (same logic as isAdminJid but async-capable)
+    const actorTokens = new Set();
+    const local = jidLocal(jid);
+    if (local) actorTokens.add(local);
+    actorTokens.add(jid);
+
+    if (jid.endsWith('@lid') && local) {
+        const phone = await resolvePhoneFromLid(local);
+        if (phone) {
+            actorTokens.add(phone);
+            actorTokens.add(`${phone}@s.whatsapp.net`);
+        }
+    } else if (jid.endsWith('@s.whatsapp.net') && local) {
+        const lid = await resolveLidFromPhone(local);
+        if (lid) {
+            actorTokens.add(lid);
+            actorTokens.add(`${lid}@lid`);
+        }
+    }
+
+    for (const candidate of cachedAdmins) {
+        const candidateJid = toWhatsappJid(candidate);
+        if (!candidateJid) continue;
+        const candidateLocal = jidLocal(candidateJid);
+        if (actorTokens.has(candidateJid) || actorTokens.has(candidateLocal)) return true;
+    }
+
+    return false;
 };
 
 const listAdminJids = () => {
-    const fromStatic = getBotAdmins();
-    return Array.from(new Set([SUPERADMIN_JID, ...fromStatic, ...runtimeAdminOverrides].filter(Boolean)));
+    const fromCache = cachedAdmins || [];
+    return Array.from(new Set([...fromCache, ...runtimeAdminOverrides].filter(Boolean)));
 };
 
 const addAdminJid = async (targetJid) => {
@@ -150,6 +227,8 @@ const isAdminJid = (sock, jid, pushName) => {
 module.exports = {
     getAdminSettings,
     isAdminJid,
+    checkIsAdmin,
+    fetchBotAdmins,
     extractPhoneDigits,
     addAdminJid,
     listAdminJids,
