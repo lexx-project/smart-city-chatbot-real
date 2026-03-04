@@ -13,6 +13,7 @@ const {
     getAdminSession,
     updateAdminSession,
     endAdminSession,
+    getAuthenticatedStaff
 } = require('../services/adminSessionService');
 const { listAdminJids } = require('../services/adminService');
 const { resolvePhoneFromLid } = require('../services/lidService');
@@ -92,61 +93,18 @@ const handleTugaskuCommand = async (sock, msg, jid) => {
 
     await sock.sendMessage(jid, { text: 'Sistem sedang memverifikasi identitas Anda. Mohon tunggu sebentar.' });
 
-    // ── Step 1: Extract, translate, and convert phone to DB format ('08') ──
-    let rawId = jid.split('@')[0];
-    let realPhone = rawId;
+    await sock.sendMessage(jid, { text: 'Sistem sedang memverifikasi identitas Anda. Mohon tunggu sebentar.' });
 
-    console.log(`[DINAS_DEBUG] 1. Incoming JID: ${jid}`);
-    console.log(`[DINAS_DEBUG] 2. Raw ID extracted: ${rawId}`);
+    const authStaff = getAuthenticatedStaff(jid);
 
-    if (jid.endsWith('@lid')) {
-        const mappedPhone = await resolvePhoneFromLid(rawId);
-        if (mappedPhone) {
-            realPhone = mappedPhone;
-            console.log(`[DINAS_DEBUG] 3. LID translated successfully to: ${realPhone}`);
-        } else {
-            console.log(`[DINAS_DEBUG] 3. WARNING: Could not resolve LID ${rawId} in session mapping!`);
-        }
-    } else {
-        console.log(`[DINAS_DEBUG] 3. Not a LID, keeping realPhone as: ${realPhone}`);
-    }
-
-    // Convert '62' prefix to '0' to match backend DB format
-    let dbPhoneFormat = realPhone;
-    if (dbPhoneFormat.startsWith('62')) {
-        dbPhoneFormat = '0' + dbPhoneFormat.substring(2);
-    }
-    console.log(`[DINAS_DEBUG] 4. Converted to DB format: ${dbPhoneFormat}`);
-
-    let staffList;
-    try {
-        const raw = await getStaffList();
-        staffList = Array.isArray(raw) ? raw
-            : Array.isArray(raw?.data?.data) ? raw.data.data
-                : Array.isArray(raw?.data) ? raw.data
-                    : [];
-    } catch (err) {
-        console.error(`${PID} [DINAS] getStaffList error:`, err?.message);
-        await sock.sendMessage(jid, { text: 'Terjadi kesalahan saat mengambil data petugas. Silakan coba kembali.' });
+    if (!authStaff) {
+        console.log(`[DINAS_DEBUG] Akses ditolak. JID: ${jid} belum login.`);
+        await sock.sendMessage(jid, { text: 'Akses ditolak. Anda belum login ke dalam sistem. Silakan ketik:\n\n/login <email> <password>' });
         return;
     }
 
-    const staffPhones = staffList.map(s => s.phoneNumber || s.phone || 'NO_PHONE').join(', ');
-    console.log(`[DINAS_DEBUG] 5. Staff phones from DB: ${staffPhones}`);
-
-    // Exact match against DB format
-    const me = staffList.find(s => {
-        const sPhone = s.phoneNumber || s.phone || '';
-        return sPhone === dbPhoneFormat;
-    });
-
-    if (me) {
-        console.log(`[DINAS_DEBUG] 6. MATCH FOUND! Name: ${me.name || me.fullName}, ID: ${me.id}`);
-    } else {
-        console.log(`[DINAS_DEBUG] 6. NO MATCH FOUND for phone: ${dbPhoneFormat}`);
-        await sock.sendMessage(jid, { text: 'Akses ditolak. Nomor Anda tidak terdaftar sebagai petugas/dinas dalam sistem.' });
-        return;
-    }
+    const me = authStaff;
+    console.log(`[DINAS_DEBUG] VERIFICATION SUCCESS! Name: ${me.name}, ID: ${me.id}, Role: ${me.role}`);
 
     // ── Step 2: Fetch all tickets and filter for this staff ─
     await sock.sendMessage(jid, { text: 'Identitas terverifikasi. Mengambil daftar tugas Anda...' });
@@ -302,7 +260,7 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
         }
 
         const statusLabel = STATUS_LABEL[newStatus] || newStatus;
-        const staffName = me.name || me.fullName || 'Petugas';
+        const staffName = me.name || 'Petugas';
         const kat = ticket.category?.name || ticket.category?.title || 'Layanan Publik';
 
         // ── Confirm to staff ──────────────────────────────
@@ -362,7 +320,7 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
 
             await updateTicketStatus(ticketId, 'RESOLVED');
 
-            const staffName = me.name || me.fullName || 'Petugas';
+            const staffName = me.name || 'Petugas';
             const tid = ticketNumber || ticketId || ticket?.ticketNumber || 'TKT';
 
             endAdminSession(jid);

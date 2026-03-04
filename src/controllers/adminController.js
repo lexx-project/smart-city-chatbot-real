@@ -1,6 +1,6 @@
 const { isAdminJid } = require('../services/adminService');
 const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep } = require('../services/botFlowService');
-const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
+const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession, getAuthenticatedStaff } = require('../services/adminSessionService');
 const { nestClient } = require('../api/nestClient');
 const { getAdminToken } = require('../services/adminAuthService');
 
@@ -307,8 +307,12 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
     const text = String(bodyText || '').trim();
 
+    const authStaff = getAuthenticatedStaff(jid);
+    const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
+
+    // Check old admin routing or new staff auth routing
     const isAdmin = await isAdminJid(sock, jid, pushName);
-    if (!isAdmin) return false;
+    if (!isAdmin && !isSuperOrAdmin) return false;
 
     let session = getAdminSession(jid);
 

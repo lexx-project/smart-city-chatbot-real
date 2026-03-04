@@ -16,6 +16,7 @@ const {
   getOrCreateUser,
   getCategoryIdFromFlow,
 } = require("../services/botFlowService");
+const { getAuthenticatedStaff } = require("../services/adminSessionService");
 
 
 // Validator Engine
@@ -74,10 +75,12 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
   const pushName = msg.pushName || "Warga";
   const isAdmin = isAdminJid(sock, jid, pushName);
+  const authStaff = getAuthenticatedStaff(jid);
+  const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
   const adminSettings = await getBotSettings();
 
   // Jika admin mengirim pesan menggunakan prefix '/' (command), biarkan adminController yang menangani.
-  if (isAdmin && bodyText.startsWith("/")) return false;
+  if ((isAdmin || isSuperOrAdmin) && bodyText.startsWith("/")) return false;
 
   const normalizedText = String(bodyText || "").trim();
   if (!normalizedText) return;

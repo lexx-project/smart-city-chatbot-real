@@ -6,7 +6,7 @@ const { handleTugaskuCommand, handleTugaskuSession } = require('../controllers/d
 const { logIncomingChat } = require('../utils/logger');
 const { extractBodyText, shouldSkipMessage, isStaleMessage } = require('../middlewares/messageMiddleware');
 const { checkIsAdmin } = require('../services/adminService');
-const { getAdminSession } = require('../services/adminSessionService');
+const { getAdminSession, loginStaff, getAuthenticatedStaff } = require('../services/adminSessionService');
 
 
 // ═══════════════════════════════════════════════════════
@@ -47,11 +47,37 @@ const registerRoutes = (sock) => {
                 msg.bodyText = bodyText;
 
                 const isAdmin = await checkIsAdmin(jid);
+                const authStaff = getAuthenticatedStaff(jid);
+                const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
+
+                // ── LOGIN COMMAND (/login <email> <password>) ──
+                if (bodyText.toLowerCase().startsWith('/login')) {
+                    console.log(`[PID:${process.pid}] [ROUTER] /login attempt from ${jid}`);
+                    const args = bodyText.split(' ').filter(Boolean);
+                    if (args.length < 3) {
+                        await sock.sendMessage(jid, { text: '❌ Format salah. Gunakan: /login <email> <password>' });
+                        continue;
+                    }
+
+                    const email = args[1];
+                    const password = args.slice(2).join(' '); // Password might contain spaces, but usually not, just in case
+
+                    await sock.sendMessage(jid, { text: '⏳ _Proses autentikasi..._' });
+                    const loginResult = await loginStaff(jid, email, password);
+
+                    if (loginResult.success) {
+                        const { name, role } = loginResult.data;
+                        await sock.sendMessage(jid, { text: `✅ Login Berhasil! Selamat datang ${name} (${role}).` });
+                    } else {
+                        await sock.sendMessage(jid, { text: `❌ Login Gagal: ${loginResult.message}` });
+                    }
+                    continue; // Skip further routing
+                }
 
                 // ── TICKET COMMAND (/tiket or /tiket <status>) ──
                 // Must run BEFORE handleAdminMessage so the ticket session
                 // is never intercepted by adminController.
-                if (isAdmin && (bodyText === '/tiket' || bodyText.toLowerCase().startsWith('/tiket '))) {
+                if ((isAdmin || isSuperOrAdmin) && (bodyText === '/tiket' || bodyText.toLowerCase().startsWith('/tiket '))) {
                     console.log(`[PID:${process.pid}] [ROUTER] /tiket command from admin ${jid}`);
                     await handleTicketCommand(sock, msg, jid, bodyText);
                     handledByAdmin = true;
@@ -59,7 +85,7 @@ const registerRoutes = (sock) => {
                 }
 
                 // ── CEKTUGAS COMMAND (/cektugas) ──
-                if (isAdmin && bodyText.toLowerCase().startsWith('/cektugas')) {
+                if ((isAdmin || isSuperOrAdmin) && bodyText.toLowerCase().startsWith('/cektugas')) {
                     console.log(`[PID:${process.pid}] [ROUTER] /cektugas command from admin ${jid}`);
                     await handleCekTugasCommand(sock, msg, jid);
                     handledByAdmin = true;
@@ -67,7 +93,7 @@ const registerRoutes = (sock) => {
                 }
 
                 // ── STATS COMMAND (/stats) ──
-                if (isAdmin && bodyText.toLowerCase().startsWith('/stats')) {
+                if ((isAdmin || isSuperOrAdmin) && bodyText.toLowerCase().startsWith('/stats')) {
                     console.log(`[PID:${process.pid}] [ROUTER] /stats command from admin ${jid}`);
                     await handleStatsCommand(sock, msg, jid);
                     handledByAdmin = true;
@@ -94,7 +120,7 @@ const registerRoutes = (sock) => {
                 // ── TICKET SESSION REPLIES (TICKET_FLOW) ──
                 // Check step prefix so this catches WAITING_TICKET_* and WAITING_STATUS_* states.
                 const ticketSession = anySession; // reuse — already fetched above
-                if (isAdmin && ticketSession && (
+                if ((isAdmin || isSuperOrAdmin) && ticketSession && (
                     ticketSession.step === 'SELECT_TICKET_STATUS' ||
                     ticketSession.step.startsWith('WAITING_TICKET_') ||
                     ticketSession.step.startsWith('WAITING_STATUS_') ||
@@ -108,7 +134,7 @@ const registerRoutes = (sock) => {
                 }
 
                 // ── CEKTUGAS SESSION REPLIES (CEK_TUGAS_FLOW) ──
-                if (isAdmin && ticketSession?.type === 'CEK_TUGAS_FLOW') {
+                if ((isAdmin || isSuperOrAdmin) && ticketSession?.type === 'CEK_TUGAS_FLOW') {
                     console.log(`[PID:${process.pid}] [ROUTER] CekTugas session | jid=${jid} | step=${ticketSession.step}`);
                     await handleCekTugasSession(sock, msg, jid, bodyText, ticketSession);
                     handledByAdmin = true;
