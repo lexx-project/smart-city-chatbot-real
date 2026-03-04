@@ -147,89 +147,114 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   }
 
   // TENTUKAN LANGKAH BERIKUTNYA
-  if (children.length === 0) {
-    // STEP TERAKHIR: Kirim Data ke BE
-    await sock.sendMessage(jid, {
-      text: "⏳ _Laporan/Data Anda sedang kami proses..._",
-    });
-
-    const phone = extractPhoneDigits(jid);
-    const flowId = currentStep.flowId || null;
-
-    // Resolve userId dan categoryId secara paralel
-    const [userId, categoryId] = await Promise.all([
-      getOrCreateUser(phone, pushName),
-      getCategoryIdFromFlow(flowId),
-    ]);
-
-    if (!userId) {
-      console.error('[WARGA_CTRL] Gagal mendapatkan userId. Tiket tidak dikirim.');
-      await sock.sendMessage(jid, {
-        text: "❌ Maaf, sistem gagal mengidentifikasi akun Anda. Silakan coba lagi dalam beberapa saat.",
-      });
-      endSession(jid);
-      return true;
-    }
-
-    if (!categoryId) {
-      console.error('[WARGA_CTRL] Gagal mendapatkan categoryId. Tiket tidak dikirim.');
-      await sock.sendMessage(jid, {
-        text: "❌ Maaf, kategori laporan tidak ditemukan. Silakan coba mulai ulang.",
-      });
-      endSession(jid);
-      return true;
-    }
-
-    const ticketPayload = {
-      description: JSON.stringify(session.answers, null, 2),
-      userId,
-      categoryId,
-    };
-
-    console.log('[WARGA_CTRL] Mengirim tiket:', JSON.stringify(ticketPayload));
-
-    // Fire and forget ke Backend
-    const result = await submitTicket(ticketPayload);
-
-    const closingMsg =
-      adminSettings.SESSION_END_TEXT ||
-      "Terima kasih, laporan/data Anda telah berhasil dicatat ke dalam sistem.";
-
-    if (result) {
-      await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
+  if (children.length > 0) {
+    if (children.length === 1) {
+      nextStepId = children[0].id;
     } else {
-      await sock.sendMessage(jid, {
-        text: "⚠️ Laporan diterima, namun terjadi kendala saat menyimpan ke sistem. Tim kami akan menindaklanjuti.",
-      });
+      // PILIHAN GANDA (Menu)
+      const selectedChild = children.find(
+        (c) =>
+          String(c.stepOrder) === normalizedText ||
+          (c.stepKey && c.stepKey.toLowerCase() === normalizedText.toLowerCase()),
+      );
+
+      if (!selectedChild) {
+        await sock.sendMessage(jid, {
+          text: "❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai.",
+        });
+        updateSession(jid);
+        return true;
+      }
+
+      // Simpan data pilihan jika diperlukan
+      if (currentStep.stepKey && currentStep.stepKey !== "main_menu") {
+        session.answers[currentStep.stepKey] =
+          selectedChild.stepKey || normalizedText;
+      }
+
+      nextStepId = selectedChild.id;
+    }
+  } else {
+    console.log(`\n--- [DEBUG BOT FLOW] ---`);
+    console.log(`Step Saat Ini  : ${currentStep.stepKey}`);
+    console.log(`NextStepKey DB : ${currentStep.nextStepKey}`);
+    console.log(`------------------------\n`);
+
+    let forceTicketCreation = false;
+
+    if (!currentStep.nextStepKey) {
+      console.log('[DEBUG] nextStepKey KOSONG (null). Wawancara dianggap selesai, membuat tiket...');
+      forceTicketCreation = true;
+    } else {
+      const dbNextStep = await getStep(currentStep.nextStepKey);
+      if (!dbNextStep) {
+        console.log(`[DEBUG] ❌ AWAS! nextStepKey '${currentStep.nextStepKey}' TIDAK DITEMUKAN di list Steps! Flow terputus. Memaksa bikin tiket...`);
+        forceTicketCreation = true;
+      } else {
+        console.log(`[DEBUG] ✅ Melanjutkan ke step berikutnya: ${dbNextStep.stepKey}`);
+        nextStepId = dbNextStep.id;
+      }
     }
 
-    endSession(jid);
-    return true;
-  } else if (children.length === 1) {
-    nextStepId = children[0].id;
-  } else {
-    // PILIHAN GANDA (Menu)
-    const selectedChild = children.find(
-      (c) =>
-        String(c.stepOrder) === normalizedText ||
-        (c.stepKey && c.stepKey.toLowerCase() === normalizedText.toLowerCase()),
-    );
-
-    if (!selectedChild) {
+    if (forceTicketCreation) {
+      // STEP TERAKHIR: Kirim Data ke BE
       await sock.sendMessage(jid, {
-        text: "❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai.",
+        text: "⏳ _Laporan/Data Anda sedang kami proses..._",
       });
-      updateSession(jid);
+
+      const phone = extractPhoneDigits(jid);
+      const flowId = currentStep.flowId || null;
+
+      // Resolve userId dan categoryId secara paralel
+      const [userId, categoryId] = await Promise.all([
+        getOrCreateUser(phone, pushName),
+        getCategoryIdFromFlow(flowId),
+      ]);
+
+      if (!userId) {
+        console.error('[WARGA_CTRL] Gagal mendapatkan userId. Tiket tidak dikirim.');
+        await sock.sendMessage(jid, {
+          text: "❌ Maaf, sistem gagal mengidentifikasi akun Anda. Silakan coba lagi dalam beberapa saat.",
+        });
+        endSession(jid);
+        return true;
+      }
+
+      if (!categoryId) {
+        console.error('[WARGA_CTRL] Gagal mendapatkan categoryId. Tiket tidak dikirim.');
+        await sock.sendMessage(jid, {
+          text: "❌ Maaf, kategori laporan tidak ditemukan. Silakan coba mulai ulang.",
+        });
+        endSession(jid);
+        return true;
+      }
+
+      const ticketPayload = {
+        description: JSON.stringify(session.answers, null, 2),
+        userId,
+        categoryId,
+      };
+
+      console.log('[WARGA_CTRL] Mengirim tiket:', JSON.stringify(ticketPayload));
+
+      // Fire and forget ke Backend
+      const result = await submitTicket(ticketPayload);
+
+      const closingMsg =
+        adminSettings.SESSION_END_TEXT ||
+        "Terima kasih, laporan/data Anda telah berhasil dicatat ke dalam sistem.";
+
+      if (result) {
+        await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
+      } else {
+        await sock.sendMessage(jid, {
+          text: "⚠️ Laporan diterima, namun terjadi kendala saat menyimpan ke sistem. Tim kami akan menindaklanjuti.",
+        });
+      }
+
+      endSession(jid);
       return true;
     }
-
-    // Simpan data pilihan jika diperlukan
-    if (currentStep.stepKey && currentStep.stepKey !== "main_menu") {
-      session.answers[currentStep.stepKey] =
-        selectedChild.stepKey || normalizedText;
-    }
-
-    nextStepId = selectedChild.id;
   }
 
   // KONDISI 3: KIRIM STEP SELANJUTNYA
