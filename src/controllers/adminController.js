@@ -1,6 +1,8 @@
 const { isAdminJid } = require('../services/adminService');
 const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep } = require('../services/botFlowService');
 const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
+const { nestClient } = require('../api/nestClient');
+const { getAdminToken } = require('../services/adminAuthService');
 
 
 // ═══════════════════════════════════════════════════════
@@ -1210,4 +1212,48 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     return false;
 };
 
-module.exports = { handleAdminMessage };
+// ═══════════════════════════════════════════════════════
+//  STATS COMMAND HANDLER
+// ═══════════════════════════════════════════════════════
+
+const handleStatsCommand = async (sock, msg, jid) => {
+    try {
+        await sock.sendMessage(jid, { text: '⏳ _Mengambil data statistik tiket. Mohon tunggu..._' });
+
+        const token = await getAdminToken();
+        if (!token) {
+            await sock.sendMessage(jid, { text: '❌ Sesi admin Anda tidak valid atau token tidak ditemukan.' });
+            return;
+        }
+        const headers = { Authorization: `Bearer ${token}` };
+
+        const [openRes, progressRes, resolvedRes] = await Promise.all([
+            nestClient.get('/tickets', { params: { status: 'OPEN', limit: 1 }, headers }),
+            nestClient.get('/tickets', { params: { status: 'IN_PROGRESS', limit: 1 }, headers }),
+            nestClient.get('/tickets', { params: { status: 'RESOLVED', limit: 1 }, headers })
+        ]);
+
+        const openCount = openRes.data?.meta?.total || openRes.data?.data?.length || 0;
+        const progressCount = progressRes.data?.meta?.total || progressRes.data?.data?.length || 0;
+        const resolvedCount = resolvedRes.data?.meta?.total || resolvedRes.data?.data?.length || 0;
+        const totalCount = openCount + progressCount + resolvedCount;
+
+        const statsMsg = `📊 *Ringkasan Kinerja Layanan Kota*
+-------------------------
+Berikut adalah status penanganan laporan masyarakat saat ini:
+
+📥 Total Laporan Aktif: ${totalCount}
+🆕 Menunggu Respons (OPEN): ${openCount}
+🚧 Sedang Dikerjakan (IN_PROGRESS): ${progressCount}
+✅ Selesai (RESOLVED): ${resolvedCount}
+
+Terus pantau dan pastikan tidak ada laporan yang terbengkalai.`;
+
+        await sock.sendMessage(jid, { text: statsMsg });
+    } catch (error) {
+        console.error('[ADMIN_CTRL] Error fetching stats:', error?.message);
+        await sock.sendMessage(jid, { text: '❌ Terjadi kesalahan saat mengambil statistik tiket.' });
+    }
+};
+
+module.exports = { handleAdminMessage, handleStatsCommand };

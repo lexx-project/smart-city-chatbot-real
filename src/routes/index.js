@@ -1,4 +1,4 @@
-const { handleAdminMessage } = require('../controllers/adminController');
+const { handleAdminMessage, handleStatsCommand } = require('../controllers/adminController');
 const { handleWargaMessage } = require('../controllers/wargaController');
 const { handleTicketCommand, handleTicketSession } = require('../controllers/ticketController');
 const { handleCekTugasCommand, handleCekTugasSession } = require('../controllers/tugasController');
@@ -62,6 +62,14 @@ const registerRoutes = (sock) => {
                 if (isAdmin && bodyText.toLowerCase().startsWith('/cektugas')) {
                     console.log(`[PID:${process.pid}] [ROUTER] /cektugas command from admin ${jid}`);
                     await handleCekTugasCommand(sock, msg, jid);
+                    handledByAdmin = true;
+                    continue;
+                }
+
+                // ── STATS COMMAND (/stats) ──
+                if (isAdmin && bodyText.toLowerCase().startsWith('/stats')) {
+                    console.log(`[PID:${process.pid}] [ROUTER] /stats command from admin ${jid}`);
+                    await handleStatsCommand(sock, msg, jid);
                     handledByAdmin = true;
                     continue;
                 }
