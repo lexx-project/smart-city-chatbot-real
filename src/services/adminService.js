@@ -50,10 +50,10 @@ const getAdminSettings = async () => {
         if (response?.data && typeof response.data === 'object' && !Array.isArray(response.data)) {
             return response.data;
         }
-        return {};
+        return { GREETING_MSG: 'Halo! 👋', SESSION_END_TEXT: 'Terima kasih.' };
     } catch (error) {
         console.error('[ADMIN_SETTINGS_ERROR] Gagal mengambil bot settings:', error?.message);
-        return {};
+        return { GREETING_MSG: 'Halo! 👋', SESSION_END_TEXT: 'Terima kasih.' };
     }
 };
 
@@ -89,8 +89,9 @@ const fetchBotAdmins = async () => {
         console.log(`[ADMIN_CACHE] Refreshed — ${jids.length} admin(s) loaded.`);
     } catch (err) {
         console.error('[ADMIN_CACHE] fetchBotAdmins failed:', err?.message);
-        // Keep existing cache; fall back to SUPERADMIN only if empty
-        if (!cachedAdmins) cachedAdmins = [];
+        if (!cachedAdmins || cachedAdmins.length === 0) {
+            cachedAdmins = ['62882009391607'];
+        }
     }
     return cachedAdmins;
 };

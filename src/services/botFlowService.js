@@ -2,20 +2,76 @@ const { nestClient } = require('../api/nestClient');
 
 const { getAdminToken, clearToken } = require('./adminAuthService');
 
+const getBotSettings = async () => {
+    try {
+        const token = await getAdminToken();
+        const res = await nestClient.get('/cms/bot-flow/messages', {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { limit: 100 }
+        });
+
+        const messages = res.data?.data || [];
+        const greetingMsg = messages.find(m => m.messageKey === 'GREETING_MSG' || m.messageKey === 'greeting');
+        const endMsg = messages.find(m => m.messageKey === 'SESSION_END_TEXT' || m.messageKey === 'end_session');
+
+        return {
+            GREETING_MSG: greetingMsg ? greetingMsg.messageText : 'Halo! 👋 Selamat datang di Layanan Smart City.\nKetik apapun untuk memulai.',
+            SESSION_END_TEXT: endMsg ? endMsg.messageText : 'Terima kasih atas laporan Anda.'
+        };
+    } catch (error) {
+        console.error('[BOT_FLOW] Gagal mengambil pesan CMS:', error.message);
+        return { GREETING_MSG: 'Halo! 👋 Selamat datang di Layanan Smart City.', SESSION_END_TEXT: 'Terima kasih.' };
+    }
+};
+
 const getMainMenu = async () => {
     try {
-        const response = await nestClient.get('/bot-flow/menu');
-        return response.data;
+        const token = await getAdminToken();
+
+        // 1. Ambil daftar Flow
+        const flowRes = await nestClient.get('/cms/bot-flow/flows', {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const flows = flowRes.data?.data || [];
+        if (flows.length === 0) return null;
+
+        // 2. Ambil detail Flow pertama (Main Menu) biar dapet list 'steps'-nya
+        const detailRes = await nestClient.get(`/cms/bot-flow/flows/${flows[0].id}`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const mainFlow = detailRes.data?.data || detailRes.data;
+
+        return {
+            id: mainFlow.id,
+            stepKey: 'main_menu',
+            messages: [{ messageText: mainFlow.description || 'Silakan pilih layanan berikut:' }],
+            children: mainFlow.steps ? mainFlow.steps.map(step => ({
+                id: step.id,
+                stepOrder: step.stepOrder,
+                stepKey: step.name || step.stepKey
+            })) : []
+        };
     } catch (error) {
+        console.error('[BOT_FLOW] Gagal mengambil Flow CMS:', error.message);
         return null;
     }
 };
 
-const getStepById = async (stepId) => {
+const getStepById = async (id) => {
     try {
-        const response = await nestClient.get(`/bot-flow/step/${stepId}`);
-        return response.data;
+        const token = await getAdminToken();
+        // Ambil semua steps, lalu cari berdasarkan ID karena endpoint GET /{id} tidak tersedia di Swagger
+        const res = await nestClient.get('/cms/bot-flow/steps', {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { limit: 200 } // Pastikan cukup besar untuk mengambil semua steps
+        });
+
+        const steps = res.data?.data || [];
+        const step = steps.find(s => s.id === id);
+
+        return step || null;
     } catch (error) {
+        console.error(`[BOT_FLOW] Gagal mengambil Step CMS ${id}:`, error.message);
         return null;
     }
 };
@@ -177,4 +233,4 @@ const createCmsStep = async (payload) => {
     }
 };
 
-module.exports = { getMainMenu, getStepById, submitTicket, getCategoryIdFromFlow, getOrCreateUser, getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep };
+module.exports = { getMainMenu, getStepById, getBotSettings, submitTicket, getCategoryIdFromFlow, getOrCreateUser, getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep };

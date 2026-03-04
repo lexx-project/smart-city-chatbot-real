@@ -5,13 +5,13 @@ const {
   endSession,
 } = require("../services/wargaSessionService");
 const {
-  getAdminSettings,
   isAdminJid,
   extractPhoneDigits,
 } = require("../services/adminService");
 const {
   getMainMenu,
   getStepById,
+  getBotSettings,
   submitTicket,
   getOrCreateUser,
   getCategoryIdFromFlow,
@@ -74,7 +74,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
   const pushName = msg.pushName || "Warga";
   const isAdmin = isAdminJid(sock, jid, pushName);
-  const adminSettings = await getAdminSettings();
+  const adminSettings = await getBotSettings();
 
   // Jika admin mengirim pesan menggunakan prefix '/' (command), biarkan adminController yang menangani.
   if (isAdmin && bodyText.startsWith("/")) return false;
