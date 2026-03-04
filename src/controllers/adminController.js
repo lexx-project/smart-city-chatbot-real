@@ -307,12 +307,9 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
     const text = String(bodyText || '').trim();
 
-    const authStaff = getAuthenticatedStaff(jid);
-    const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
-
-    // Check old admin routing or new staff auth routing
-    const isAdmin = await isAdminJid(sock, jid, pushName);
-    if (!isAdmin && !isSuperOrAdmin) return false;
+    const staff = getAuthenticatedStaff(jid);
+    const isAdmin = staff && staff.role && staff.role.toUpperCase().includes('ADMIN');
+    if (!isAdmin) return false;
 
     let session = getAdminSession(jid);
 

@@ -46,32 +46,27 @@ const registerRoutes = (sock) => {
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
 
-                const isAdmin = await checkIsAdmin(jid);
-                const staff = getAuthenticatedStaff(jid);
-                const isSuperOrAdmin = staff && staff.role && staff.role.toUpperCase().includes('ADMIN');
-
-                // ── LOGIN COMMAND (/login <email> <password>) ──
-                if (bodyText.toLowerCase().startsWith('/login ')) {
-                    console.log(`[PID:${process.pid}] [ROUTER] /login attempt from ${jid}`);
-                    const args = bodyText.split(' ').filter(Boolean);
-                    if (args.length < 3) {
-                        await sock.sendMessage(jid, { text: '❌ Format salah. Gunakan: /login <email> <password>' });
+                // 1. Handle Login Command
+                if (bodyText.startsWith('/login ')) {
+                    const parts = bodyText.split(' ');
+                    if (parts.length < 3) {
+                        await sock.sendMessage(jid, { text: '❌ Format: /login <email> <password>' });
                         continue;
                     }
-
-                    const email = args[1];
-                    const password = args.slice(2).join(' '); // Password might contain spaces, but usually not, just in case
-
-                    await sock.sendMessage(jid, { text: '⏳ Memverifikasi kredensial...' });
-                    const result = await loginStaffWa(jid, email, password);
-
-                    if (result.success) {
-                        await sock.sendMessage(jid, { text: `✅ Berhasil! Selamat datang ${result.name} (${result.role}).` });
+                    await sock.sendMessage(jid, { text: '⏳ Memverifikasi kredensial ke server...' });
+                    const res = await loginStaffWa(jid, parts[1], parts[2]);
+                    if (res.success) {
+                        await sock.sendMessage(jid, { text: `✅ Berhasil! Selamat datang ${res.name} (${res.role}).` });
                     } else {
-                        await sock.sendMessage(jid, { text: `❌ Login Gagal: ${result.message}` });
+                        await sock.sendMessage(jid, { text: `❌ Login Gagal: ${res.message}` });
                     }
-                    continue; // Skip further routing
+                    continue;
                 }
+
+                // 2. Identify Admin Status from Session
+                const staff = getAuthenticatedStaff(jid);
+                const isAdmin = staff && staff.role && staff.role.includes('ADMIN');
+                const isSuperOrAdmin = isAdmin;
 
                 // ── TICKET COMMAND (/tiket or /tiket <status>) ──
                 // Must run BEFORE handleAdminMessage so the ticket session
