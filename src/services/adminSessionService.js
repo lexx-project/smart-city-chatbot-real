@@ -35,10 +35,48 @@ const loginStaffWa = async (jid, email, password) => {
 const getAuthenticatedStaff = (jid) => loadSessions()[jid] || null;
 
 // Preserve existing wizard session functions
+// Preserve existing wizard session functions
+const { getAdminTimeout } = require('./adminSettingsService');
 const adminSessions = {};
-const startAdminSession = (jid) => { adminSessions[jid] = { step: 'SELECT_CATEGORY', data: {} }; return adminSessions[jid]; };
-const updateAdminSession = (jid, patch) => { if (adminSessions[jid]) adminSessions[jid] = { ...adminSessions[jid], ...patch }; return adminSessions[jid]; };
+
+const clearAdminSessionTimer = (jid) => {
+    if (adminSessions[jid] && adminSessions[jid].timeoutId) {
+        clearTimeout(adminSessions[jid].timeoutId);
+        adminSessions[jid].timeoutId = null;
+    }
+};
+
+const refreshAdminSessionTimeout = (jid) => {
+    clearAdminSessionTimer(jid);
+    if (adminSessions[jid]) {
+        const timeoutSeconds = getAdminTimeout();
+        adminSessions[jid].timeoutId = setTimeout(() => {
+            endAdminSession(jid);
+            console.log(`[ADMIN_SESSION_TIMEOUT] Sesi admin untuk ${jid} telah dihapus otomatis.`);
+        }, timeoutSeconds * 1000);
+    }
+};
+
+const startAdminSession = (jid) => {
+    clearAdminSessionTimer(jid);
+    adminSessions[jid] = { step: 'SELECT_CATEGORY', data: {} };
+    refreshAdminSessionTimeout(jid);
+    return adminSessions[jid];
+};
+
+const updateAdminSession = (jid, patch) => {
+    if (adminSessions[jid]) {
+        adminSessions[jid] = { ...adminSessions[jid], ...patch };
+        refreshAdminSessionTimeout(jid);
+    }
+    return adminSessions[jid];
+};
+
 const getAdminSession = (jid) => adminSessions[jid] || null;
-const endAdminSession = (jid) => { if (adminSessions[jid]) delete adminSessions[jid]; };
+
+const endAdminSession = (jid) => {
+    clearAdminSessionTimer(jid);
+    if (adminSessions[jid]) delete adminSessions[jid];
+};
 
 module.exports = { loginStaffWa, getAuthenticatedStaff, startAdminSession, updateAdminSession, getAdminSession, endAdminSession };

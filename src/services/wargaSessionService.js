@@ -1,3 +1,5 @@
+const { getAdminTimeout, getAdminTimeoutText } = require('./adminSettingsService');
+
 const sessions = {};
 
 const clearSessionTimer = (jid) => {
@@ -7,7 +9,7 @@ const clearSessionTimer = (jid) => {
     }
 };
 
-const startSession = (jid, initialStepId = null, flowMode = 'static', timeoutSeconds = 3600) => {
+const startSession = (jid, sock, initialStepId = null, flowMode = 'static', timeoutSeconds = null) => {
     clearSessionTimer(jid);
     sessions[jid] = {
         startTime: Date.now(),
@@ -15,16 +17,17 @@ const startSession = (jid, initialStepId = null, flowMode = 'static', timeoutSec
         currentStepId: initialStepId,
         flowMode: flowMode,
         answers: {}, // Tempat menyimpan jawaban per stepKey
-        timeoutId: null
+        timeoutId: null,
+        sock: sock // Simpan instance sock
     };
-    refreshSessionTimeout(jid, timeoutSeconds);
+    refreshSessionTimeout(jid, timeoutSeconds || getAdminTimeout());
     return sessions[jid];
 };
 
-const updateSession = (jid, patch = {}) => {
+const updateSession = (jid, patch = {}, timeoutSeconds = null) => {
     if (sessions[jid]) {
         sessions[jid] = { ...sessions[jid], ...patch, lastInteraction: Date.now() };
-        refreshSessionTimeout(jid, 3600); // Default 1 jam
+        refreshSessionTimeout(jid, timeoutSeconds || getAdminTimeout());
     }
     return sessions[jid];
 };
@@ -39,9 +42,18 @@ const endSession = (jid) => {
 const refreshSessionTimeout = (jid, timeoutSeconds) => {
     clearSessionTimer(jid);
     if (sessions[jid]) {
-        sessions[jid].timeoutId = setTimeout(() => {
+        const sock = sessions[jid].sock; // Ambil socket yang tersimpan
+        sessions[jid].timeoutId = setTimeout(async () => {
             endSession(jid);
             console.log(`[SESSION_TIMEOUT] Sesi untuk ${jid} telah dihapus otomatis.`);
+            if (sock) {
+                try {
+                    const timeoutMsg = getAdminTimeoutText();
+                    await sock.sendMessage(jid, { text: timeoutMsg });
+                } catch (e) {
+                    console.error('[WARGA_SESSION_TIMEOUT_ERROR] Failed to send message:', e);
+                }
+            }
         }, timeoutSeconds * 1000);
     }
 };

@@ -102,7 +102,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       return true;
     }
 
-    session = startSession(jid, mainMenu.id);
+    session = startSession(jid, sock, mainMenu.id);
 
     let msgToSend = adminSettings.GREETING_MSG
       ? `${adminSettings.GREETING_MSG}\n\n`
@@ -183,15 +183,81 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     console.log(`NextStepKey DB : ${currentStep.nextStepKey}`);
     console.log(`------------------------\n`);
 
+    let targetNextStepKey = currentStep.nextStepKey;
+
+    // ── VALIDATION RULE CHECK ──
+    if (currentStep.validationRule) {
+      let rule = currentStep.validationRule;
+      let isValid = true;
+
+      // Handle regex format (e.g., "regex:/.../" or raw string)
+      if (rule.startsWith('regex:')) {
+        let patternStr = rule.substring(6);
+        let pattern = patternStr;
+        let flags = '';
+
+        if (patternStr.startsWith('/') && patternStr.lastIndexOf('/') > 0) {
+          const lastSlash = patternStr.lastIndexOf('/');
+          pattern = patternStr.substring(1, lastSlash);
+          flags = patternStr.substring(lastSlash + 1);
+        }
+
+        try {
+          isValid = new RegExp(pattern, flags).test(bodyText);
+        } catch (e) {
+          console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
+          isValid = true;
+        }
+      } else {
+        // Assume it's a raw regex string from DB
+        try {
+          isValid = new RegExp(rule).test(bodyText);
+        } catch (e) {
+          console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
+          isValid = true; // Fallback if regex is broken
+        }
+      }
+
+      if (!isValid) {
+        await sock.sendMessage(jid, {
+          text: `⚠️ *Format Tidak Sesuai*\n\nMohon masukkan data sesuai format yang diminta.\nContoh: 33.XX.XXX.XXX.XXX.XXXX.X_2024`
+        });
+        return true; // Stop here, don't advance the step
+      }
+    }
+
+    // BRANCHING LOGIC for Select/Confirmation
+    if (['select', 'confirmation'].includes(currentStep.inputType)) {
+      const message = currentStep.messages?.[0]; // Get the active message
+      const options = message?.metadata?.options || [];
+
+      if (options.length > 0) {
+        // Find matching option based on user input (normalizedText)
+        const matchedOption = options.find(opt =>
+          String(opt.option).toLowerCase() === normalizedText.toLowerCase()
+        );
+
+        if (matchedOption && matchedOption.nextStepKey) {
+          console.log(`[FLOW_BRANCH] User chose ${normalizedText}, branching to: ${matchedOption.nextStepKey}`);
+          targetNextStepKey = matchedOption.nextStepKey;
+        } else {
+          // If user types something not in options
+          await sock.sendMessage(jid, { text: "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka/pilihan yang benar." });
+          updateSession(jid);
+          return true;
+        }
+      }
+    }
+
     let forceTicketCreation = false;
 
-    if (!currentStep.nextStepKey) {
-      console.log('[DEBUG] nextStepKey KOSONG (null). Wawancara dianggap selesai, membuat tiket...');
+    if (!targetNextStepKey) {
+      console.log('[DEBUG] targetNextStepKey KOSONG (null). Wawancara dianggap selesai, membuat tiket...');
       forceTicketCreation = true;
     } else {
-      const dbNextStep = await getStep(currentStep.nextStepKey);
+      const dbNextStep = await getStep(targetNextStepKey);
       if (!dbNextStep) {
-        console.log(`[DEBUG] ❌ AWAS! nextStepKey '${currentStep.nextStepKey}' TIDAK DITEMUKAN di list Steps! Flow terputus. Memaksa bikin tiket...`);
+        console.log(`[DEBUG] ❌ AWAS! targetNextStepKey '${targetNextStepKey}' TIDAK DITEMUKAN di list Steps! Flow terputus. Memaksa bikin tiket...`);
         forceTicketCreation = true;
       } else {
         console.log(`[DEBUG] ✅ Melanjutkan ke step berikutnya: ${dbNextStep.stepKey}`);

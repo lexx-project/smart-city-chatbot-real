@@ -38,7 +38,7 @@ const getMainMenu = async () => {
         return {
             id: 'root_menu',
             stepKey: 'main_menu',
-            messages: [{ messageText: 'Halo! 👋 Selamat datang di Layanan Publik Pintar.\n\nSilakan pilih layanan berikut:' }],
+            messages: [],
             children: flows.map((flow, index) => {
                 // Cari step pertama dari flow ini (yang stepOrder-nya 1)
                 const firstStep = flow.steps?.find(s => s.stepOrder === 1) || flow.steps?.[0];
@@ -178,7 +178,8 @@ const getCmsMessages = async () => {
 
     try {
         const response = await nestClient.get('/cms/bot-flow/messages', {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${token}` },
+            params: { limit: 100 }
         });
         return response.data?.data || response.data;
     } catch (error) {

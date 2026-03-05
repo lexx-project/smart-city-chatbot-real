@@ -1,253 +1,34 @@
 const { isAdminJid } = require('../services/adminService');
-const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep } = require('../services/botFlowService');
+const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep, getBotSettings, getMainMenu } = require('../services/botFlowService');
 const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession, getAuthenticatedStaff } = require('../services/adminSessionService');
+const { getAdminTimeout, getAdminTimeoutText, updateAdminTimeout, updateAdminTimeoutText } = require('../services/adminSettingsService');
 const { nestClient } = require('../api/nestClient');
 const { getAdminToken } = require('../services/adminAuthService');
 
 
 // ═══════════════════════════════════════════════════════
-//  KONFIGURASI KATEGORI & LABEL
+//  KONFIGURASI PENGATURAN TEKS
 // ═══════════════════════════════════════════════════════
 
-/**
- * Definisi kategori pesan.
- * Setiap kategori memiliki label emoji dan fungsi matcher
- * yang menentukan apakah sebuah pesan masuk ke kategori tersebut.
- */
-const MESSAGE_CATEGORIES = [
-    {
-        id: 'greeting',
-        label: '👋 Pesan Sambutan & Sesi',
-        match: (msg) => {
-            const k = (msg.messageKey || '').toLowerCase();
-            const t = (msg.messageType || '').toLowerCase();
-            return ['greeting', 'success', 'timeout'].some(
-                (kw) => k.includes(kw) || t.includes(kw)
-            );
-        },
-    },
-    {
-        id: 'error',
-        label: '⚠️ Pesan Error & Validasi',
-        match: (msg) => {
-            const k = (msg.messageKey || '').toLowerCase();
-            const t = (msg.messageType || '').toLowerCase();
-            return ['error', 'invalid_choice', 'session_expired'].some(
-                (kw) => k.includes(kw) || t.includes(kw)
-            );
-        },
-    },
-    {
-        id: 'menu',
-        label: '📋 Menu & Kategori',
-        match: (msg) => {
-            const k = (msg.messageKey || '').toLowerCase();
-            const t = (msg.messageType || '').toLowerCase();
-            return ['category_prompt', 'sub_category_prompt', 'no_categories'].some(
-                (kw) => k.includes(kw) || t.includes(kw)
-            );
-        },
-    },
-    {
-        id: 'flow',
-        label: '📝 Alur Layanan (Flow)',
-        match: (msg) => {
-            const k = (msg.messageKey || '').toLowerCase();
-            return k.startsWith('flow_');
-        },
-    },
-    {
-        id: 'notification',
-        label: '🔔 Notifikasi Sistem',
-        match: (msg) => {
-            const k = (msg.messageKey || '').toLowerCase();
-            const t = (msg.messageType || '').toLowerCase();
-            return ['ticket_status_update', 'confirmation_prompt'].some(
-                (kw) => k.includes(kw) || t.includes(kw)
-            );
-        },
-    },
-];
-
-// Kategori fallback untuk pesan yang tidak masuk kategori mana pun
-const FALLBACK_CATEGORY = { id: 'other', label: '📦 Lainnya' };
-
-// ═══════════════════════════════════════════════════════
-//  LABEL YANG MANUSIAWI (Human-Readable)
-// ═══════════════════════════════════════════════════════
-
-/**
- * Lookup table untuk mengonversi keyword dalam messageKey
- * menjadi label yang mudah dibaca.
- */
-const KEY_LABEL_MAP = {
-    // Greeting & Session
-    greeting: '👋 Pesan Sapaan',
-    welcome: '🏠 Pesan Selamat Datang',
-    success: '✅ Pesan Berhasil',
-    timeout: '⏰ Pesan Waktu Habis',
-
-    // Error & Validation
-    error: '❌ Pesan Error',
-    invalid_choice: '🚫 Pilihan Tidak Valid',
-    session_expired: '⏳ Sesi Kedaluwarsa',
-
-    // Menu & Category
-    category_prompt: '📂 Prompt Pilih Kategori',
-    sub_category_prompt: '📁 Prompt Sub-Kategori',
-    no_categories: '📭 Tidak Ada Kategori',
-
-    // Flow-specific keywords
-    ask_lokasi: '📍 Pertanyaan Lokasi',
-    ask_deskripsi: '📝 Pertanyaan Deskripsi',
-    ask_foto: '📸 Pertanyaan Foto',
-    ask_nama: '👤 Pertanyaan Nama',
-    ask_kontak: '📞 Pertanyaan Kontak',
-    ask_alamat: '🏡 Pertanyaan Alamat',
-    ask_tanggal: '📅 Pertanyaan Tanggal',
-    ask_waktu: '🕐 Pertanyaan Waktu',
-    ask_jumlah: '🔢 Pertanyaan Jumlah',
-    confirm: '✔️ Konfirmasi',
-    result: '📊 Hasil',
-    intro: '📌 Pengantar',
-
-    // Notification
-    ticket_status_update: '🔔 Update Status Tiket',
-    confirmation_prompt: '❓ Prompt Konfirmasi',
-
-    // Flow domain keywords (untuk parenthetical context)
-    jalan: 'Jalan Rusak',
-    lampu: 'Lampu Jalan',
-    sampah: 'Sampah',
-    banjir: 'Banjir',
-    air: 'Air PDAM',
-    pdam: 'PDAM',
-    pohon: 'Pohon Tumbang',
-    parkir: 'Parkir Liar',
-    kebisingan: 'Kebisingan',
-    perizinan: 'Perizinan',
-    kependudukan: 'Kependudukan',
-    administrasi: 'Administrasi',
-};
-
-/**
- * Label emoji untuk setiap domain flow, digunakan dalam daftar sub-grup.
- */
-const FLOW_DOMAIN_LABELS = {
-    jalan: '🛣️ Jalan Rusak',
-    lampu: '💡 Lampu Jalan',
-    sampah: '🗑️ Sampah',
-    banjir: '🌊 Banjir',
-    air: '💧 Air PDAM',
-    pdam: '💧 PDAM',
-    pohon: '🌳 Pohon Tumbang',
-    parkir: '🚗 Parkir Liar',
-    kebisingan: '🔊 Kebisingan',
-    perizinan: '📄 Perizinan',
-    kependudukan: '👥 Kependudukan',
-    administrasi: '🏛️ Administrasi',
-};
-
-/**
- * Mengonversi messageKey mentah menjadi label yang mudah dibaca manusia.
- * Contoh: "flow_jalan_ask_lokasi" -> "📍 Pertanyaan Lokasi (Jalan Rusak)"
- */
 const humanizeKey = (messageKey) => {
     if (!messageKey) return 'Pesan Tanpa Nama';
-
     const key = messageKey.toLowerCase();
 
-    // Untuk key yang diawali flow_, parse secara khusus
-    if (key.startsWith('flow_')) {
-        const parts = key.replace('flow_', '').split('_');
+    if (key === 'greeting') return '👋 Pesan Sambutan Utama';
+    if (key === 'success') return '✅ Pesan Berhasil (Sukses)';
+    if (key === 'error') return '❌ Pesan Error Umum';
+    if (key === 'timeout') return '⏰ Pesan Waktu Habis';
+    if (key === 'session_expired') return '⏳ Sesi Kedaluwarsa';
+    if (key === 'invalid_choice') return '🚫 Pilihan Tidak Valid';
+    if (key === 'category_prompt') return '📂 Prompt Pilih Kategori';
+    if (key === 'description_prompt') return '📝 Prompt Deskripsi Detail';
 
-        // Cari label aksi (ask_lokasi, confirm, result, dll.)
-        let actionLabel = '';
-        let domainLabel = '';
-
-        // Coba match multi-word action dulu (mis: ask_lokasi)
-        for (let i = 0; i < parts.length; i++) {
-            for (let j = parts.length; j > i; j--) {
-                const candidate = parts.slice(i, j).join('_');
-                if (KEY_LABEL_MAP[candidate]) {
-                    actionLabel = KEY_LABEL_MAP[candidate];
-                    // Sisa parts sebelum aksi = domain
-                    const domainParts = parts.slice(0, i);
-                    domainLabel = domainParts
-                        .map((p) => KEY_LABEL_MAP[p] || titleCase(p))
-                        .filter(Boolean)
-                        .join(' ');
-                    break;
-                }
-            }
-            if (actionLabel) break;
-        }
-
-        if (actionLabel) {
-            return domainLabel
-                ? `${actionLabel} (${domainLabel})`
-                : actionLabel;
-        }
-
-        // Fallback: title-case semua parts
-        return parts.map((p) => titleCase(p)).join(' ');
-    }
-
-    // Untuk key non-flow, cek langsung di lookup
-    if (KEY_LABEL_MAP[key]) return KEY_LABEL_MAP[key];
-
-    // Coba match parsial
-    for (const [kw, lbl] of Object.entries(KEY_LABEL_MAP)) {
-        if (key.includes(kw)) return lbl;
-    }
-
-    // Fallback: ubah underscore menjadi spasi dan title-case
-    return titleCase(messageKey.replace(/_/g, ' '));
+    return messageKey.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 };
-
-/** Utility: Title Case */
-const titleCase = (str) =>
-    String(str || '')
-        .split(' ')
-        .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : ''))
-        .join(' ');
 
 // ═══════════════════════════════════════════════════════
 //  UTILITAS
 // ═══════════════════════════════════════════════════════
-
-/**
- * Mengelompokkan array pesan ke dalam kategori.
- * Mengembalikan array { category, messages } yang hanya berisi
- * kategori dengan >= 1 pesan.
- */
-const groupMessagesByCategory = (messages) => {
-    const assigned = new Set();
-    const groups = [];
-
-    for (const cat of MESSAGE_CATEGORIES) {
-        const matched = messages.filter((m, idx) => {
-            if (assigned.has(idx)) return false;
-            if (cat.match(m)) {
-                assigned.add(idx);
-                return true;
-            }
-            return false;
-        });
-
-        if (matched.length > 0) {
-            groups.push({ category: cat, messages: matched });
-        }
-    }
-
-    // Pesan yang tidak masuk kategori mana pun
-    const unmatched = messages.filter((_, idx) => !assigned.has(idx));
-    if (unmatched.length > 0) {
-        groups.push({ category: FALLBACK_CATEGORY, messages: unmatched });
-    }
-
-    return groups;
-};
 
 /**
  * Mendeteksi placeholder/variabel dalam teks pesan.
@@ -267,33 +48,6 @@ const truncateText = (text, maxLen = 60) => {
     if (!text) return '(kosong)';
     if (text.length <= maxLen) return text;
     return text.substring(0, maxLen) + '...';
-};
-
-/**
- * Mengelompokkan pesan-pesan flow berdasarkan domain.
- * Contoh: flow_jalan_ask_lokasi -> domain "jalan"
- * Mengembalikan array { domain, label, messages }
- */
-const groupFlowByDomain = (flowMessages) => {
-    const domainMap = {};
-
-    for (const msg of flowMessages) {
-        const key = (msg.messageKey || '').toLowerCase();
-        // Ambil kata pertama setelah "flow_" sebagai domain
-        const afterFlow = key.replace(/^flow_/, '');
-        const domainKey = afterFlow.split('_')[0] || 'lainnya';
-
-        if (!domainMap[domainKey]) {
-            domainMap[domainKey] = [];
-        }
-        domainMap[domainKey].push(msg);
-    }
-
-    return Object.entries(domainMap).map(([domain, messages]) => ({
-        domain,
-        label: FLOW_DOMAIN_LABELS[domain] || `📝 ${titleCase(domain)}`,
-        messages,
-    }));
 };
 
 // ═══════════════════════════════════════════════════════
@@ -330,51 +84,93 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     //  /setting — Mulai wizard pengaturan
     // ────────────────────────────────────────────────────
     if (text.toLowerCase() === '/setting') {
-        await sock.sendMessage(jid, { text: '⏳ _Mengambil daftar pesan dari server..._' });
+        await sock.sendMessage(jid, { text: '⏳ _Sinkronisasi dengan Web Dashboard..._' });
 
-        let messages;
         try {
-            messages = await getCmsMessages();
-        } catch (err) {
-            console.error('[ADMIN_CTRL] getCmsMessages error:', err?.message);
-            messages = null;
-        }
+            const [messages, flowsRes] = await Promise.all([
+                getCmsMessages(),
+                nestClient.get('/cms/bot-flow/flows', {
+                    headers: { Authorization: `Bearer ${await getAdminToken()}` },
+                    params: { limit: 100 }
+                })
+            ]);
 
-        if (!messages || !Array.isArray(messages) || messages.length === 0) {
-            await sock.sendMessage(jid, {
-                text:
-                    '❌ *GAGAL MEMUAT DATA*\n\n' +
-                    'Tidak dapat mengambil daftar pesan dari backend.\n\n' +
-                    '*Kemungkinan penyebab:*\n' +
-                    '• Server NestJS belum berjalan\n' +
-                    '• Koneksi ke backend (nestClient) terputus\n' +
-                    '• Kredensial admin di .env tidak valid\n\n' +
-                    '💡 _Cek log terminal bot untuk detail error._',
+            const flows = flowsRes.data?.data || flowsRes.data || [];
+
+            if (!messages || !flows) throw new Error("Data kosong dari BE");
+
+            session = startAdminSession(jid);
+
+            // GROUPING LOGIC (Mirrors Dashboard)
+            const flowSubGroups = flows.map(f => ({ id: f.id, label: `📝 Flow: ${f.flowName}`, messages: [] }));
+
+            const groups = [
+                { id: 'system', label: '⚙️ Pesan Sistem & Notifikasi', messages: [] },
+                { id: 'menu', label: '📋 Menu & Navigasi', messages: [] },
+                { id: 'flows', label: '📝 Alur Layanan (Flows)', subGroups: flowSubGroups },
+                { id: 'other', label: '📦 Pesan Lainnya', messages: [] }
+            ];
+
+            // DISTRIBUTE MESSAGES
+            messages.forEach(msg => {
+                // If message belongs to a flow step
+                if (msg.flowStep && msg.flowStep.flowId) {
+                    const flowGroup = groups[2].subGroups.find(g => g.id === msg.flowStep.flowId);
+                    if (flowGroup) {
+                        flowGroup.messages.push(msg);
+                        return;
+                    }
+                }
+
+                const key = (msg.messageKey || '').toLowerCase();
+
+                // System Messages
+                if (['greeting', 'error', 'success', 'timeout', 'session_expired', 'invalid_choice', 'ticket_status_update'].includes(key)) {
+                    groups[0].messages.push(msg);
+                    return;
+                }
+
+                // Menu Messages
+                if (['category_prompt', 'sub_category_prompt', 'category_selected', 'description_prompt', 'confirmation_prompt', 'no_categories'].includes(key)) {
+                    groups[1].messages.push(msg);
+                    return;
+                }
+
+                // Fallback
+                groups[3].messages.push(msg);
             });
+
+            // CLEANUP EMPTY GROUPS
+            groups[2].subGroups = groups[2].subGroups.filter(g => (g.messages || []).length > 0);
+            const activeGroups = groups.filter(g => g.id === 'flows' ? (g.subGroups || []).length > 0 : (g.messages || []).length > 0);
+
+            // Tambahkan Pengaturan Timeout Sesi secara manual di akhir daftar
+            activeGroups.push({
+                id: 'timeout_setting',
+                label: '⏱️ Pengaturan Timeout Sesi',
+                messages: []
+            });
+
+            session.data.groups = activeGroups;
+
+            let reply = '⚙️ *PENGATURAN TEKS BOT (SYNCED)*\n';
+            reply += '📍 _Menu Utama_\n━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += 'Pilih kategori pesan yang ingin dikelola:\n\n';
+
+            activeGroups.forEach((g, idx) => {
+                const count = g.id === 'flows' ? g.subGroups.length + ' layanan' : (g.messages || []).length + ' pesan';
+                reply += `*${idx + 1}.* ${g.label} _(${count})_\n`;
+            });
+
+            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n👉 _Balas dengan angka (contoh: 1)_\n🛑 _Ketik /cancel untuk membatalkan_';
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+
+        } catch (err) {
+            console.error('[ADMIN_CTRL] /setting error:', err?.message);
+            await sock.sendMessage(jid, { text: '❌ *GAGAL MEMUAT DATA*\nPastikan koneksi ke Backend aman.' });
             return true;
         }
-
-        session = startAdminSession(jid);
-        const groups = groupMessagesByCategory(messages);
-
-        session.data.messagesList = messages;
-        session.data.groups = groups;
-
-        let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-        reply += '📍 _Menu Utama_\n';
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += 'Pilih kategori pesan yang ingin dikelola:\n\n';
-
-        groups.forEach((g, idx) => {
-            reply += `*${idx + 1}.* ${g.category.label} _(${g.messages.length} pesan)_\n`;
-        });
-
-        reply += '\n━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '👉 _Balas dengan angka (contoh: 1)_\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
-        await sock.sendMessage(jid, { text: reply });
-        return true;
     }
 
     // ────────────────────────────────────────────────────
@@ -428,52 +224,48 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
 
         const selectedGroup = groups[choice - 1];
 
-        // Khusus kategori Flow: tampilkan sub-grup domain dulu
-        if (selectedGroup.category.id === 'flow') {
-            const flowDomains = groupFlowByDomain(selectedGroup.messages);
+        if (selectedGroup.id === 'flows') {
+            updateAdminSession(jid, { step: 'SELECT_FLOW_DOMAIN', data: { ...session.data, selectedGroup } });
 
-            updateAdminSession(jid, {
-                step: 'SELECT_FLOW_DOMAIN',
-                data: {
-                    ...session.data,
-                    selectedCategory: selectedGroup,
-                    categoryIndex: choice,
-                    flowDomains,
-                },
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\nPilih jenis layanan:\n\n`;
+
+            selectedGroup.subGroups.forEach((g, idx) => {
+                reply += `*${idx + 1}.* ${g.label} _(${(g.messages || []).length} pesan)_\n`;
             });
 
-            let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-            reply += `📍 _Menu Utama > ${selectedGroup.category.label}_\n`;
-            reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-            reply += 'Pilih jenis layanan yang ingin dikelola:\n\n';
+            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_\n🛑 _Ketik /cancel untuk membatalkan_';
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
 
-            flowDomains.forEach((fd, idx) => {
-                reply += `*${idx + 1}.* ${fd.label} _(${fd.messages.length} pesan)_\n`;
-            });
+        if (selectedGroup.id === 'timeout_setting') {
+            updateAdminSession(jid, { step: 'SELECT_TIMEOUT_OPTION', data: { ...session.data, selectedGroup } });
 
-            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n';
-            reply += '*0.* ⬅️ Kembali ke daftar kategori\n';
-            reply += '👉 _Balas dengan angka layanan (contoh: 1)_\n';
-            reply += '🛑 _Ketik /cancel untuk membatalkan_';
+            const currentTimeout = getAdminTimeout();
+            const currentText = getAdminTimeoutText();
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            reply += `Pilih pengaturan yang ingin diubah:\n\n`;
+            reply += `*1.* ⏱️ Durasi Timeout: _${currentTimeout} detik_\n`;
+            reply += `*2.* 💬 Pesan Timeout:\n   _"${truncateText(currentText, 50)}"_\n\n`;
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
 
             await sock.sendMessage(jid, { text: reply });
             return true;
         }
 
-        // Kategori non-flow: langsung tampilkan daftar pesan
         updateAdminSession(jid, {
             step: 'SELECT_MESSAGE',
             data: {
                 ...session.data,
-                selectedCategory: selectedGroup,
+                selectedGroup,
                 categoryIndex: choice,
             },
         });
 
         let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-        reply += `📍 _Menu Utama > ${selectedGroup.category.label}_\n`;
+        reply += `📍 _Menu Utama > ${selectedGroup.label}_\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `Pesan dalam kategori *${selectedGroup.category.label}*:\n\n`;
+        reply += `Pesan dalam kategori *${selectedGroup.label}*:\n\n`;
 
         selectedGroup.messages.forEach((m, idx) => {
             const label = humanizeKey(m.messageKey);
@@ -492,83 +284,171 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     }
 
     // ────────────────────────────────────────────────────
-    //  STEP 1b: SELECT_FLOW_DOMAIN (khusus kategori Flow)
+    //  STEP 1b: SELECT_FLOW_DOMAIN
     // ────────────────────────────────────────────────────
     if (session.step === 'SELECT_FLOW_DOMAIN') {
-        const { flowDomains, selectedCategory } = session.data;
+        const selectedGroup = session.data.selectedGroup;
 
-        // Opsi kembali ke daftar kategori
         if (text === '0') {
-            updateAdminSession(jid, {
-                step: 'SELECT_CATEGORY',
-                data: {
-                    ...session.data,
-                    selectedCategory: undefined,
-                    categoryIndex: undefined,
-                    flowDomains: undefined,
-                },
-            });
+            updateAdminSession(jid, { step: 'SELECT_CATEGORY', data: { ...session.data, selectedGroup: undefined } });
 
             const groups = session.data.groups;
             let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-            reply += '📍 _Menu Utama_\n';
-            reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
+            reply += '📍 _Menu Utama_\n━━━━━━━━━━━━━━━━━━━━━\n\n';
             reply += 'Pilih kategori pesan yang ingin dikelola:\n\n';
 
             groups.forEach((g, idx) => {
-                reply += `*${idx + 1}.* ${g.category.label} _(${g.messages.length} pesan)_\n`;
+                const count = g.id === 'flows' ? (g.subGroups || []).length + ' layanan' : (g.messages || []).length + ' pesan';
+                reply += `*${idx + 1}.* ${g.label} _(${count})_\n`;
             });
 
-            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n';
-            reply += '👉 _Balas dengan angka (contoh: 1)_\n';
-            reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n👉 _Balas dengan angka (contoh: 1)_\n🛑 _Ketik /cancel untuk membatalkan_';
             await sock.sendMessage(jid, { text: reply });
             return true;
         }
 
         const choice = parseInt(text);
-
-        if (isNaN(choice) || choice < 1 || choice > flowDomains.length) {
-            await sock.sendMessage(jid, {
-                text: '❌ Pilihan tidak valid. Balas dengan angka layanan yang tertera, atau *0* untuk kembali.',
-            });
+        if (isNaN(choice) || choice < 1 || choice > selectedGroup.subGroups.length) {
+            await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Balas dengan angka layanan yang tertera, atau *0* untuk kembali.' });
             return true;
         }
 
-        const selectedDomain = flowDomains[choice - 1];
+        const selectedSub = selectedGroup.subGroups[choice - 1];
+        updateAdminSession(jid, { step: 'SELECT_MESSAGE', data: { ...session.data, parentGroup: selectedGroup, selectedGroup: selectedSub } });
 
-        // Override selectedCategory.messages dengan pesan domain terpilih
-        updateAdminSession(jid, {
-            step: 'SELECT_MESSAGE',
-            data: {
-                ...session.data,
-                selectedDomain,
-                // Simpan referensi pesan yang tampil (hanya milik domain ini)
-                selectedCategory: {
-                    ...selectedCategory,
-                    messages: selectedDomain.messages,
-                },
-            },
-        });
+        let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label} > ${selectedSub.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        reply += `Pesan dalam *${selectedSub.label}*:\n\n`;
 
-        let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-        reply += `📍 _Menu Utama > ${selectedCategory.category.label} > ${selectedDomain.label}_\n`;
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-        reply += `Pesan dalam *${selectedDomain.label}*:\n\n`;
-
-        selectedDomain.messages.forEach((m, idx) => {
+        selectedSub.messages.forEach((m, idx) => {
             const label = humanizeKey(m.messageKey);
             const preview = truncateText(m.messageText, 50);
             reply += `*${idx + 1}.* ${label}\n`;
             reply += `   💬 _"${preview}"_\n\n`;
         });
 
-        reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-        reply += '*0.* ⬅️ Kembali ke daftar layanan\n';
-        reply += '👉 _Balas dengan angka pesan yang ingin diubah_\n';
-        reply += '🛑 _Ketik /cancel untuk membatalkan_';
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali ke daftar layanan\n👉 _Balas dengan angka pesan yang ingin diubah_\n🛑 _Ketik /cancel untuk membatalkan_';
+        await sock.sendMessage(jid, { text: reply });
+        return true;
+    }
 
+    // ────────────────────────────────────────────────────
+    //  STEP 1c: SELECT_TIMEOUT_OPTION
+    // ────────────────────────────────────────────────────
+    if (session.step === 'SELECT_TIMEOUT_OPTION') {
+        const selectedGroup = session.data.selectedGroup;
+
+        if (text === '0') {
+            updateAdminSession(jid, { step: 'SELECT_CATEGORY', data: { ...session.data, selectedGroup: undefined } });
+
+            const groups = session.data.groups;
+            let reply = '⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama_\n━━━━━━━━━━━━━━━━━━━━━\n\nPilih kategori pesan yang ingin dikelola:\n\n';
+            groups.forEach((g, idx) => {
+                const count = g.id === 'flows' ? (g.subGroups || []).length + ' layanan' : (g.messages || []).length + ' pesan';
+                reply += `*${idx + 1}.* ${g.label} _(${count})_\n`;
+            });
+            reply += '\n━━━━━━━━━━━━━━━━━━━━━\n👉 _Balas dengan angka (contoh: 1)_\n🛑 _Ketik /cancel untuk membatalkan_';
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
+
+        if (text === '1') {
+            updateAdminSession(jid, { step: 'AWAITING_TIMEOUT_DURATION_INPUT', data: { ...session.data, selectedGroup } });
+
+            const currentTimeout = getAdminTimeout();
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label} > Durasi_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            reply += `⏱️ *Durasi Saat Ini:* ${currentTimeout} detik (${Math.round(currentTimeout / 60)} menit)\n\n`;
+            reply += 'Masukkan durasi timeout baru dalam *detik* (minimal 60).\n\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Batal\n👉 _Balas dengan angka_';
+
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
+
+        if (text === '2') {
+            updateAdminSession(jid, { step: 'AWAITING_TIMEOUT_TEXT_INPUT', data: { ...session.data, selectedGroup } });
+
+            const currentText = getAdminTimeoutText();
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label} > Teks_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            reply += `💬 *Pesan Timeout Saat Ini:*\n${currentText}\n\n`;
+            reply += '✏️ _Silakan ketik pesan timeout yang baru sekarang._\n\n';
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Batal';
+
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
+
+        await sock.sendMessage(jid, { text: '❌ Pilihan tidak valid. Pilih 1 atau 2, atau *0* untuk kembali.' });
+        return true;
+    }
+
+    // ────────────────────────────────────────────────────
+    //  STEP 1d: AWAITING_TIMEOUT_DURATION_INPUT
+    // ────────────────────────────────────────────────────
+    if (session.step === 'AWAITING_TIMEOUT_DURATION_INPUT') {
+        const selectedGroup = session.data.selectedGroup;
+
+        if (text === '0') {
+            updateAdminSession(jid, { step: 'SELECT_TIMEOUT_OPTION', data: { ...session.data } });
+            const currentTimeout = getAdminTimeout();
+            const currentText = getAdminTimeoutText();
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            reply += `Pilih pengaturan yang ingin diubah:\n\n`;
+            reply += `*1.* ⏱️ Durasi Timeout: _${currentTimeout} detik_\n`;
+            reply += `*2.* 💬 Pesan Timeout:\n   _"${truncateText(currentText, 50)}"_\n\n`;
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
+
+        const newTimeout = parseInt(text);
+        if (isNaN(newTimeout) || newTimeout < 60) {
+            await sock.sendMessage(jid, { text: '❌ Nilai tidak valid. Masukkan angka minimal *60* (detik), atau *0* untuk membatalkan.' });
+            return true;
+        }
+
+        updateAdminTimeout(newTimeout);
+        await sock.sendMessage(jid, { text: `✅ *BERHASIL*\nTimeout sesi admin telah diubah ke *${newTimeout} detik* (${Math.round(newTimeout / 60)} menit).` });
+
+        updateAdminSession(jid, { step: 'SELECT_TIMEOUT_OPTION', data: { ...session.data } });
+        const currentText = getAdminTimeoutText();
+        let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        reply += `Pilih pengaturan yang ingin diubah:\n\n`;
+        reply += `*1.* ⏱️ Durasi Timeout: _${newTimeout} detik_\n`;
+        reply += `*2.* 💬 Pesan Timeout:\n   _"${truncateText(currentText, 50)}"_\n\n`;
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
+        await sock.sendMessage(jid, { text: reply });
+        return true;
+    }
+
+    // ────────────────────────────────────────────────────
+    //  STEP 1e: AWAITING_TIMEOUT_TEXT_INPUT
+    // ────────────────────────────────────────────────────
+    if (session.step === 'AWAITING_TIMEOUT_TEXT_INPUT') {
+        const selectedGroup = session.data.selectedGroup;
+
+        if (text === '0') {
+            updateAdminSession(jid, { step: 'SELECT_TIMEOUT_OPTION', data: { ...session.data } });
+            const currentTimeout = getAdminTimeout();
+            const currentText = getAdminTimeoutText();
+            let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            reply += `Pilih pengaturan yang ingin diubah:\n\n`;
+            reply += `*1.* ⏱️ Durasi Timeout: _${currentTimeout} detik_\n`;
+            reply += `*2.* 💬 Pesan Timeout:\n   _"${truncateText(currentText, 50)}"_\n\n`;
+            reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
+            await sock.sendMessage(jid, { text: reply });
+            return true;
+        }
+
+        updateAdminTimeoutText(text);
+        await sock.sendMessage(jid, { text: `✅ *BERHASIL*\nPesan timeout sesi admin telah diperbarui.` });
+
+        updateAdminSession(jid, { step: 'SELECT_TIMEOUT_OPTION', data: { ...session.data } });
+        const currentTimeout = getAdminTimeout();
+        let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${selectedGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        reply += `Pilih pengaturan yang ingin diubah:\n\n`;
+        reply += `*1.* ⏱️ Durasi Timeout: _${currentTimeout} detik_\n`;
+        reply += `*2.* 💬 Pesan Timeout:\n   _"${truncateText(text, 50)}"_\n\n`;
+        reply += '━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
         await sock.sendMessage(jid, { text: reply });
         return true;
     }
@@ -577,52 +457,35 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     //  STEP 2: SELECT_MESSAGE (dalam kategori)
     // ────────────────────────────────────────────────────
     if (session.step === 'SELECT_MESSAGE') {
-        const selectedCategory = session.data.selectedCategory;
-        const selectedDomain = session.data.selectedDomain; // ada jika dari flow
+        const selectedGroup = session.data.selectedGroup;
+        const parentGroup = session.data.parentGroup;
 
         // Opsi kembali
         if (text === '0') {
-            // Jika berasal dari flow domain, kembali ke daftar domain
-            if (selectedDomain) {
-                const { flowDomains } = session.data;
-                // Kembalikan selectedCategory ke bentuk asli (semua flow messages)
-                const originalFlowGroup = session.data.groups.find(
-                    (g) => g.category.id === 'flow'
-                );
-
+            if (parentGroup) {
                 updateAdminSession(jid, {
                     step: 'SELECT_FLOW_DOMAIN',
                     data: {
                         ...session.data,
-                        selectedCategory: originalFlowGroup,
-                        selectedDomain: undefined,
+                        selectedGroup: parentGroup,
+                        parentGroup: undefined,
                     },
                 });
 
-                let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-                reply += `📍 _Menu Utama > ${originalFlowGroup.category.label}_\n`;
-                reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-                reply += 'Pilih jenis layanan yang ingin dikelola:\n\n';
-
-                flowDomains.forEach((fd, idx) => {
-                    reply += `*${idx + 1}.* ${fd.label} _(${fd.messages.length} pesan)_\n`;
+                let reply = `⚙️ *PENGATURAN TEKS BOT*\n📍 _Menu Utama > ${parentGroup.label}_\n━━━━━━━━━━━━━━━━━━━━━\n\nPilih jenis layanan:\n\n`;
+                parentGroup.subGroups.forEach((g, idx) => {
+                    reply += `*${idx + 1}.* ${g.label} _(${(g.messages || []).length} pesan)_\n`;
                 });
-
-                reply += '\n━━━━━━━━━━━━━━━━━━━━━\n';
-                reply += '*0.* ⬅️ Kembali ke daftar kategori\n';
-                reply += '👉 _Balas dengan angka layanan (contoh: 1)_\n';
-                reply += '🛑 _Ketik /cancel untuk membatalkan_';
-
+                reply += '\n━━━━━━━━━━━━━━━━━━━━━\n*0.* ⬅️ Kembali\n👉 _Balas dengan angka_';
                 await sock.sendMessage(jid, { text: reply });
                 return true;
             }
 
-            // Kategori non-flow: kembali ke daftar kategori
             updateAdminSession(jid, {
                 step: 'SELECT_CATEGORY',
                 data: {
                     ...session.data,
-                    selectedCategory: undefined,
+                    selectedGroup: undefined,
                     categoryIndex: undefined,
                 },
             });
@@ -634,7 +497,7 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
             reply += 'Pilih kategori pesan yang ingin dikelola:\n\n';
 
             groups.forEach((g, idx) => {
-                reply += `*${idx + 1}.* ${g.category.label} _(${g.messages.length} pesan)_\n`;
+                reply += `*${idx + 1}.* ${g.label} _(${g.id === 'flows' ? g.subGroups.length + ' layanan' : g.messages.length + ' pesan'})_\n`;
             });
 
             reply += '\n━━━━━━━━━━━━━━━━━━━━━\n';
@@ -646,7 +509,7 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
         }
 
         const choice = parseInt(text);
-        const categoryMessages = selectedCategory.messages;
+        const categoryMessages = selectedGroup.messages;
 
         if (isNaN(choice) || choice < 1 || choice > categoryMessages.length) {
             await sock.sendMessage(jid, {
@@ -669,9 +532,12 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
         });
 
         const label = humanizeKey(selectedMsg.messageKey);
-        const domainBreadcrumb = selectedDomain ? ` > ${selectedDomain.label}` : '';
+        const breadcrumb = session.data.parentGroup
+            ? `${session.data.parentGroup.label} > ${selectedGroup.label}`
+            : selectedGroup.label;
+
         let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-        reply += `📍 _Menu Utama > ${selectedCategory.category.label}${domainBreadcrumb} > ${label}_\n`;
+        reply += `📍 _Menu Utama > ${breadcrumb} > ${label}_\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
         reply += `📝 *UBAH PESAN: ${label}*\n\n`;
         reply += `*Teks Saat Ini:*\n${selectedMsg.messageText}\n\n`;
@@ -696,7 +562,7 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
     //  STEP 3: AWAITING_INPUT — Admin mengetik teks baru
     // ────────────────────────────────────────────────────
     if (session.step === 'AWAITING_INPUT') {
-        const { selectedMsg, selectedCategory, selectedDomain, placeholders } = session.data;
+        const { selectedMsg, selectedGroup, placeholders } = session.data;
         const newText = text;
 
         // Cek apakah placeholder yang diperlukan masih ada di teks baru
@@ -714,9 +580,12 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
         });
 
         const label = humanizeKey(selectedMsg.messageKey);
-        const domainBreadcrumb = selectedDomain ? ` > ${selectedDomain.label}` : '';
+        const breadcrumb = session.data.parentGroup
+            ? `${session.data.parentGroup.label} > ${selectedGroup.label}`
+            : selectedGroup.label;
+
         let reply = '⚙️ *PENGATURAN TEKS BOT*\n';
-        reply += `📍 _Menu Utama > ${selectedCategory.category.label}${domainBreadcrumb} > ${label} > Preview_\n`;
+        reply += `📍 _Menu Utama > ${breadcrumb} > ${label} > Preview_\n`;
         reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
         reply += '🔍 *PREVIEW PERUBAHAN*\n\n';
         reply += `📌 *Pesan:* ${label}\n\n`;
@@ -747,8 +616,8 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
         const answer = text.toUpperCase();
 
         if (answer === 'N') {
-            // Kembali ke SELECT_MESSAGE dalam kategori/domain yang sama
-            const { selectedCategory, selectedDomain } = session.data;
+            // Kembali ke SELECT_MESSAGE dalam grup
+            const { selectedGroup } = session.data;
 
             updateAdminSession(jid, {
                 step: 'SELECT_MESSAGE',
@@ -762,17 +631,13 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
                 },
             });
 
-            const domainBreadcrumb = selectedDomain ? ` > ${selectedDomain.label}` : '';
-            const listTitle = selectedDomain ? selectedDomain.label : selectedCategory.category.label;
-            const backLabel = selectedDomain ? 'daftar layanan' : 'daftar kategori';
-
             let reply = '↩️ _Perubahan dibatalkan._\n\n';
             reply += '⚙️ *PENGATURAN TEKS BOT*\n';
-            reply += `📍 _Menu Utama > ${selectedCategory.category.label}${domainBreadcrumb}_\n`;
+            reply += `📍 _Menu Utama > ${selectedGroup.label}_\n`;
             reply += '━━━━━━━━━━━━━━━━━━━━━\n\n';
-            reply += `Pesan dalam *${listTitle}*:\n\n`;
+            reply += `Pesan dalam *${selectedGroup.label}*:\n\n`;
 
-            selectedCategory.messages.forEach((m, idx) => {
+            selectedGroup.messages.forEach((m, idx) => {
                 const label = humanizeKey(m.messageKey);
                 const preview = truncateText(m.messageText, 50);
                 reply += `*${idx + 1}.* ${label}\n`;
@@ -780,7 +645,7 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
             });
 
             reply += '━━━━━━━━━━━━━━━━━━━━━\n';
-            reply += `*0.* ⬅️ Kembali ke ${backLabel}\n`;
+            reply += '*0.* ⬅️ Kembali ke daftar kategori\n';
             reply += '👉 _Balas dengan angka pesan yang ingin diubah_\n';
             reply += '🛑 _Ketik /cancel untuk membatalkan_';
 
