@@ -203,7 +203,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         }
 
         try {
-          isValid = new RegExp(pattern, flags).test(bodyText);
+          isValid = new RegExp(pattern, flags).test(normalizedText);
         } catch (e) {
           console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
           isValid = true;
@@ -211,7 +211,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       } else {
         // Assume it's a raw regex string from DB
         try {
-          isValid = new RegExp(rule).test(bodyText);
+          isValid = new RegExp(rule).test(normalizedText);
         } catch (e) {
           console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
           isValid = true; // Fallback if regex is broken
@@ -226,23 +226,21 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       }
     }
 
-    // BRANCHING LOGIC for Select/Confirmation
+    // ── DYNAMIC BRANCHING (Select/Confirmation) ──
     if (['select', 'confirmation'].includes(currentStep.inputType)) {
-      const message = currentStep.messages?.[0]; // Get the active message
+      const message = currentStep.messages?.[0];
       const options = message?.metadata?.options || [];
 
       if (options.length > 0) {
-        // Find matching option based on user input (normalizedText)
         const matchedOption = options.find(opt =>
           String(opt.option).toLowerCase() === normalizedText.toLowerCase()
         );
 
         if (matchedOption && matchedOption.nextStepKey) {
-          console.log(`[FLOW_BRANCH] User chose ${normalizedText}, branching to: ${matchedOption.nextStepKey}`);
+          console.log(`[FLOW_BRANCH] Belok ke: ${matchedOption.nextStepKey}`);
           targetNextStepKey = matchedOption.nextStepKey;
         } else {
-          // If user types something not in options
-          await sock.sendMessage(jid, { text: "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka/pilihan yang benar." });
+          await sock.sendMessage(jid, { text: "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka yang benar." });
           updateSession(jid);
           return true;
         }
@@ -250,15 +248,29 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     }
 
     let forceTicketCreation = false;
+    const activeMsg = currentStep.messages?.[0];
+    const isInfoOrSuccess = activeMsg && ['info', 'success'].includes(activeMsg.messageType);
 
     if (!targetNextStepKey) {
+      if (isInfoOrSuccess) {
+        // END WITHOUT TICKET
+        const text = activeMsg.messageText || "Terima kasih.";
+        await sock.sendMessage(jid, { text: `✅ ${text}` });
+        endSession(jid);
+        return true;
+      }
       console.log('[DEBUG] targetNextStepKey KOSONG (null). Wawancara dianggap selesai, membuat tiket...');
       forceTicketCreation = true;
     } else {
       const dbNextStep = await getStep(targetNextStepKey);
       if (!dbNextStep) {
         console.log(`[DEBUG] ❌ AWAS! targetNextStepKey '${targetNextStepKey}' TIDAK DITEMUKAN di list Steps! Flow terputus. Memaksa bikin tiket...`);
-        forceTicketCreation = true;
+        forceTicketCreation = !isInfoOrSuccess;
+        if (isInfoOrSuccess) {
+          await sock.sendMessage(jid, { text: activeMsg.messageText });
+          endSession(jid);
+          return true;
+        }
       } else {
         console.log(`[DEBUG] ✅ Melanjutkan ke step berikutnya: ${dbNextStep.stepKey}`);
         nextStepId = dbNextStep.id;
@@ -337,11 +349,22 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     return true;
   }
 
-  updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
+  const nextActiveMsg = nextStep.messages?.[0];
+  const isNextInfoOrSuccess = nextActiveMsg && ['info', 'success'].includes(nextActiveMsg.messageType);
 
   let nextMsg = buildMenuMessage(nextStep);
   if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
 
+  // ── IF NEXT IS SUCCESS/INFO, END SESSION IMMEDIATELY ──
+  if (isNextInfoOrSuccess) {
+    await sock.sendMessage(jid, { text: nextMsg });
+    console.log(`[FLOW_END] Step ${nextStep.stepKey} adalah ${nextActiveMsg.messageType}. Mengakhiri sesi.`);
+    endSession(jid);
+    return true;
+  }
+
+  // ── ELSE, CONTINUE SESSION NORMALLY ──
+  updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
   await sock.sendMessage(jid, { text: nextMsg });
   return true;
 };
