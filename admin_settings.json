@@ -1,4 +1,4 @@
 {
-  "timeoutSeconds": 60,
+  "timeoutSeconds": 300,
   "timeoutText": "sesi anda telah berakhir"
 }
