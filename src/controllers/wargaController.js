@@ -15,8 +15,12 @@ const {
   submitTicket,
   getOrCreateUser,
   getCategoryIdFromFlow,
+  logMessageToBackend,
+  createRemoteSession,
+  endRemoteSession,
 } = require("../services/botFlowService");
 const { getAuthenticatedStaff } = require("../services/adminSessionService");
+const { resolvePhoneFromLid } = require("../services/lidService");
 
 
 // Validator Engine
@@ -36,7 +40,6 @@ const validateInput = (text, inputType, rule) => {
     }
     if (rule.startsWith("regex:")) {
       try {
-        // Ekstrak pola regex (misal dari "regex:/^[0-9]{16}$/" menjadi "^[0-9]{16}$")
         let pattern = rule.replace("regex:", "");
         if (pattern.startsWith("/")) pattern = pattern.slice(1, -1);
 
@@ -48,7 +51,7 @@ const validateInput = (text, inputType, rule) => {
       }
     }
   }
-  return null; // Lolos validasi
+  return null;
 };
 
 const buildMenuMessage = (stepData) => {
@@ -73,22 +76,49 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   const jid = msg?.key?.remoteJid;
   if (!jid) return false;
 
+  // 1. EKSTRAK DATA PENGIRIM & LOGGING (Target PM: Bangun Data Contact)
+  const local = jid.split('@')[0];
+  let phone = local;
+
+  // FIX: Jika ini adalah LID, terjemahkan dulu ke nomor HP
+  if (jid.endsWith('@lid')) {
+    const resolved = await resolvePhoneFromLid(local);
+    if (resolved) {
+      phone = resolved; // Sekarang dapet nomor HP asli (misal: 628xxx)
+    }
+  }
+
   const pushName = msg.pushName || "Warga";
+  const normalizedText = String(bodyText || "").trim();
+
+  console.log("==========================================");
+  console.log(`[AURA_LOG] Pesan Masuk`);
+  console.log(`- Nomor HP (Real) : ${phone}`);
+  console.log(`- Nama WA         : ${pushName}`);
+  console.log(`- Isi Pesan: ${normalizedText}`);
+  console.log("==========================================");
+
+  // 1. SETOR CHAT (Biar Kategori/History masuk ke Dashboard)
+  await logMessageToBackend(phone, normalizedText);
+
   const isAdmin = isAdminJid(sock, jid, pushName);
   const authStaff = getAuthenticatedStaff(jid);
   const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
   const adminSettings = await getBotSettings();
 
-  // Jika admin mengirim pesan menggunakan prefix '/' (command), biarkan adminController yang menangani.
-  if ((isAdmin || isSuperOrAdmin) && bodyText.startsWith("/")) return false;
-
-  const normalizedText = String(bodyText || "").trim();
+  if ((isAdmin || isSuperOrAdmin) && normalizedText.startsWith("/")) return false;
   if (!normalizedText) return;
 
   let session = getSession(jid);
 
   // KONDISI 1: SESI BARU
   if (!session) {
+    // Daftar User & Buka Sesi di Backend
+    const [userId, beSessionId] = await Promise.all([
+      getOrCreateUser(phone, pushName),
+      createRemoteSession(phone)
+    ]);
+
     const rawMenu = await getMainMenu();
     const mainMenu = rawMenu?.data || rawMenu;
 
@@ -103,6 +133,8 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     }
 
     session = startSession(jid, sock, mainMenu.id);
+    session.beSessionId = beSessionId; // Simpan ID Sesi dari Backend ke memori Bot
+    updateSession(jid, { beSessionId }); // Pastikan tersimpan dengan benar di memori
 
     let msgToSend = adminSettings.GREETING_MSG
       ? `${adminSettings.GREETING_MSG}\n\n`
@@ -121,6 +153,9 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     await sock.sendMessage(jid, {
       text: "Sesi tidak valid. Silakan mulai ulang.",
     });
+    if (session.beSessionId) {
+      await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+    }
     endSession(jid);
     return true;
   }
@@ -128,12 +163,10 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   const children = currentStep.children || [];
   let nextStepId = null;
 
-  // Jika ini bukan menu utama, lakukan validasi
   if (currentStep.id !== "root_menu" && currentStep.stepKey !== "main_menu") {
-    const isSelectMode = children.length > 1; // Jika pilihan ganda, inputType otomatis select
+    const isSelectMode = children.length > 1;
 
     if (!isSelectMode) {
-      // Validasi Input Teks / Angka
       const errorMsg = validateInput(
         normalizedText,
         currentStep.inputType,
@@ -141,10 +174,9 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       );
       if (errorMsg) {
         await sock.sendMessage(jid, { text: errorMsg });
-        updateSession(jid); // Refresh timer
+        updateSession(jid);
         return true;
       }
-      // Simpan jawaban ke memori
       session.answers[currentStep.stepKey] = normalizedText;
     }
   }
@@ -154,7 +186,6 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     if (children.length === 1) {
       nextStepId = children[0].id;
     } else {
-      // PILIHAN GANDA (Menu)
       const selectedChild = children.find(
         (c) =>
           String(c.stepOrder) === normalizedText ||
@@ -169,7 +200,6 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         return true;
       }
 
-      // Simpan data pilihan jika diperlukan
       if (currentStep.stepKey && currentStep.stepKey !== "main_menu") {
         session.answers[currentStep.stepKey] =
           selectedChild.stepKey || normalizedText;
@@ -178,19 +208,12 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       nextStepId = selectedChild.id;
     }
   } else {
-    console.log(`\n--- [DEBUG BOT FLOW] ---`);
-    console.log(`Step Saat Ini  : ${currentStep.stepKey}`);
-    console.log(`NextStepKey DB : ${currentStep.nextStepKey}`);
-    console.log(`------------------------\n`);
-
     let targetNextStepKey = currentStep.nextStepKey;
 
-    // ── VALIDATION RULE CHECK ──
     if (currentStep.validationRule) {
       let rule = currentStep.validationRule;
       let isValid = true;
 
-      // Handle regex format (e.g., "regex:/.../" or raw string)
       if (rule.startsWith('regex:')) {
         let patternStr = rule.substring(6);
         let pattern = patternStr;
@@ -205,28 +228,24 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         try {
           isValid = new RegExp(pattern, flags).test(normalizedText);
         } catch (e) {
-          console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
           isValid = true;
         }
       } else {
-        // Assume it's a raw regex string from DB
         try {
           isValid = new RegExp(rule).test(normalizedText);
         } catch (e) {
-          console.error('[REGEX_ERROR] Invalid regex in DB:', rule);
-          isValid = true; // Fallback if regex is broken
+          isValid = true;
         }
       }
 
       if (!isValid) {
         await sock.sendMessage(jid, {
-          text: `⚠️ *Format Tidak Sesuai*\n\nMohon masukkan data sesuai format yang diminta.\nContoh: 33.XX.XXX.XXX.XXX.XXXX.X_2024`
+          text: `⚠️ *Format Tidak Sesuai*\n\nMohon masukkan data sesuai format yang diminta.`
         });
-        return true; // Stop here, don't advance the step
+        return true;
       }
     }
 
-    // ── DYNAMIC BRANCHING (Select/Confirmation) ──
     if (['select', 'confirmation'].includes(currentStep.inputType)) {
       const message = currentStep.messages?.[0];
       const options = message?.metadata?.options || [];
@@ -237,7 +256,6 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         );
 
         if (matchedOption && matchedOption.nextStepKey) {
-          console.log(`[FLOW_BRANCH] Belok ke: ${matchedOption.nextStepKey}`);
           targetNextStepKey = matchedOption.nextStepKey;
         } else {
           await sock.sendMessage(jid, { text: "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka yang benar." });
@@ -253,59 +271,51 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
     if (!targetNextStepKey) {
       if (isInfoOrSuccess) {
-        // END WITHOUT TICKET
         const text = activeMsg.messageText || "Terima kasih.";
+        if (session.beSessionId) {
+          await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+        }
         await sock.sendMessage(jid, { text: `✅ ${text}` });
         endSession(jid);
         return true;
       }
-      console.log('[DEBUG] targetNextStepKey KOSONG (null). Wawancara dianggap selesai, membuat tiket...');
       forceTicketCreation = true;
     } else {
       const dbNextStep = await getStep(targetNextStepKey);
       if (!dbNextStep) {
-        console.log(`[DEBUG] ❌ AWAS! targetNextStepKey '${targetNextStepKey}' TIDAK DITEMUKAN di list Steps! Flow terputus. Memaksa bikin tiket...`);
         forceTicketCreation = !isInfoOrSuccess;
         if (isInfoOrSuccess) {
+          if (session.beSessionId) {
+            await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+          }
           await sock.sendMessage(jid, { text: activeMsg.messageText });
           endSession(jid);
           return true;
         }
       } else {
-        console.log(`[DEBUG] ✅ Melanjutkan ke step berikutnya: ${dbNextStep.stepKey}`);
         nextStepId = dbNextStep.id;
       }
     }
 
     if (forceTicketCreation) {
-      // STEP TERAKHIR: Kirim Data ke BE
       await sock.sendMessage(jid, {
         text: "⏳ _Laporan/Data Anda sedang kami proses..._",
       });
 
-      const phone = extractPhoneDigits(jid);
       const flowId = currentStep.flowId || null;
 
-      // Resolve userId dan categoryId secara paralel
       const [userId, categoryId] = await Promise.all([
         getOrCreateUser(phone, pushName),
         getCategoryIdFromFlow(flowId),
       ]);
 
-      if (!userId) {
-        console.error('[WARGA_CTRL] Gagal mendapatkan userId. Tiket tidak dikirim.');
+      if (!userId || !categoryId) {
         await sock.sendMessage(jid, {
-          text: "❌ Maaf, sistem gagal mengidentifikasi akun Anda. Silakan coba lagi dalam beberapa saat.",
+          text: "❌ Maaf, terjadi kendala teknis saat memproses laporan Anda. Silakan coba mulai ulang.",
         });
-        endSession(jid);
-        return true;
-      }
-
-      if (!categoryId) {
-        console.error('[WARGA_CTRL] Gagal mendapatkan categoryId. Tiket tidak dikirim.');
-        await sock.sendMessage(jid, {
-          text: "❌ Maaf, kategori laporan tidak ditemukan. Silakan coba mulai ulang.",
-        });
+        if (session.beSessionId) {
+          await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+        }
         endSession(jid);
         return true;
       }
@@ -316,16 +326,13 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         categoryId,
       };
 
-      console.log('[WARGA_CTRL] Mengirim tiket:', JSON.stringify(ticketPayload));
-
-      // Fire and forget ke Backend
       const result = await submitTicket(ticketPayload);
-
-      const closingMsg =
-        adminSettings.SESSION_END_TEXT ||
-        "Terima kasih, laporan/data Anda telah berhasil dicatat ke dalam sistem.";
+      const closingMsg = adminSettings.SESSION_END_TEXT || "Terima kasih, laporan Anda telah berhasil dicatat.";
 
       if (result) {
+        if (session.beSessionId) {
+          await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+        }
         await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
       } else {
         await sock.sendMessage(jid, {
@@ -355,15 +362,15 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   let nextMsg = buildMenuMessage(nextStep);
   if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
 
-  // ── IF NEXT IS SUCCESS/INFO, END SESSION IMMEDIATELY ──
   if (isNextInfoOrSuccess) {
+    if (session.beSessionId) {
+      await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
+    }
     await sock.sendMessage(jid, { text: nextMsg });
-    console.log(`[FLOW_END] Step ${nextStep.stepKey} adalah ${nextActiveMsg.messageType}. Mengakhiri sesi.`);
     endSession(jid);
     return true;
   }
 
-  // ── ELSE, CONTINUE SESSION NORMALLY ──
   updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
   await sock.sendMessage(jid, { text: nextMsg });
   return true;
