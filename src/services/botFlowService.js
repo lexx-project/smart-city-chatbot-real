@@ -178,6 +178,33 @@ const updateCmsMessage = (id, payload) => requestWithRetry('PATCH', `/cms/bot-fl
 const createCmsFlow = (payload) => requestWithRetry('POST', '/cms/bot-flow/flows', payload);
 const createCmsStep = (payload) => requestWithRetry('POST', '/cms/bot-flow/steps', payload);
 
+const getStaffData = async (phone) => {
+    // FIX FINAL: Kita nggak usah pake parameter 'search' ke BE. 
+    // Kita tarik aja 100 data staff pertama, trus filter di Bot!
+    const res = await requestWithRetry('GET', '/staff', null, { limit: 100 });
+    const list = res?.data || res;
+
+    if (Array.isArray(list) && list.length > 0) {
+        // Biar Bot lu yang nyari nomornya secara manual
+        const user = list.find(u => String(u.phone) === String(phone));
+
+        if (user) {
+            let roleName = '';
+            if (typeof user.role === 'string') {
+                roleName = user.role;
+            } else if (typeof user.role === 'object' && user.role !== null) {
+                roleName = user.role.name || '';
+            }
+
+            if (['ADMIN', 'SUPER_ADMIN', 'STAFF'].includes(roleName.toUpperCase())) {
+                user.roleNameString = roleName.toUpperCase();
+                return user; // KETEMU!
+            }
+        }
+    }
+    return null;
+};
+
 module.exports = {
     getMainMenu,
     getStep,
@@ -192,5 +219,6 @@ module.exports = {
     createRemoteSession,
     updateRemoteSessionState,
     logMessageToBackend,
-    endRemoteSession
+    endRemoteSession,
+    getStaffData
 };

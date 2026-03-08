@@ -5,7 +5,6 @@ const {
   endSession,
 } = require("../services/wargaSessionService");
 const {
-  isAdminJid,
   extractPhoneDigits,
 } = require("../services/adminService");
 const {
@@ -18,9 +17,11 @@ const {
   logMessageToBackend,
   createRemoteSession,
   endRemoteSession,
+  getStaffData,
 } = require("../services/botFlowService");
-const { getAuthenticatedStaff } = require("../services/adminSessionService");
+const { getAdminSession } = require("../services/adminSessionService");
 const { resolvePhoneFromLid } = require("../services/lidService");
+const { handleAdminMessage } = require("./adminController");
 
 
 // Validator Engine
@@ -101,12 +102,26 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   // 1. SETOR CHAT (Biar Kategori/History masuk ke Dashboard)
   await logMessageToBackend(phone, normalizedText);
 
-  const isAdmin = isAdminJid(sock, jid, pushName);
-  const authStaff = getAuthenticatedStaff(jid);
-  const isSuperOrAdmin = authStaff && ['ADMIN', 'SUPER_ADMIN'].includes(authStaff.role?.toUpperCase());
+  const staffData = await getStaffData(phone);
+
+  // MASUKIN BARIS INI LEXX! Biar kita tau isi perut Backend lu:
+  console.log("=== [DEBUG ADMIN] ===");
+  console.log("Hasil pencarian nomor:", phone);
+  console.log("Data dari BE:", JSON.stringify(staffData, null, 2));
+  console.log("=====================");
+
+  const isSuperOrAdmin = staffData && ['ADMIN', 'SUPER_ADMIN'].includes(staffData.roleNameString);
   const adminSettings = await getBotSettings();
 
-  if ((isAdmin || isSuperOrAdmin) && normalizedText.startsWith("/")) return false;
+  if (isSuperOrAdmin) {
+    const isCommand = normalizedText.startsWith("/");
+    const isAdminInSession = !!getAdminSession(jid);
+    if (isCommand || isAdminInSession) {
+      await handleAdminMessage(sock, msg, normalizedText, staffData);
+      return true;
+    }
+  }
+
   if (!normalizedText) return;
 
   let session = getSession(jid);
@@ -124,7 +139,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
     if (!mainMenu || !mainMenu.id) {
       console.error("[WARGA CONTROLLER] API Error: getMainMenu returned null or invalid.");
-      if (!isAdmin) {
+      if (!isSuperOrAdmin) {
         await sock.sendMessage(jid, {
           text: "Mohon maaf, layanan sistem sedang mengalami gangguan.",
         });

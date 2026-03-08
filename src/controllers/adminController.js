@@ -1,6 +1,6 @@
 const { isAdminJid } = require('../services/adminService');
 const { getCmsMessages, updateCmsMessage, createCmsFlow, createCmsStep, getBotSettings, getMainMenu } = require('../services/botFlowService');
-const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession, getAuthenticatedStaff } = require('../services/adminSessionService');
+const { startAdminSession, getAdminSession, updateAdminSession, endAdminSession } = require('../services/adminSessionService');
 const { getAdminTimeout, getAdminTimeoutText, updateAdminTimeout, updateAdminTimeoutText } = require('../services/adminSettingsService');
 const { nestClient } = require('../api/nestClient');
 const { getAdminToken } = require('../services/adminAuthService');
@@ -54,15 +54,14 @@ const truncateText = (text, maxLen = 60) => {
 //  HANDLER UTAMA
 // ═══════════════════════════════════════════════════════
 
-const handleAdminMessage = async (sock, msg, bodyText = '') => {
+const handleAdminMessage = async (sock, msg, bodyText = '', staffData = null) => {
     const jid = msg?.key?.remoteJid;
     const pushName = msg.pushName || 'Admin';
     if (!jid) return false;
 
     const text = String(bodyText || '').trim();
 
-    const staff = getAuthenticatedStaff(jid);
-    const isAdmin = staff && staff.role && staff.role.toUpperCase().includes('ADMIN');
+    const isAdmin = staffData && staffData.roleNameString && staffData.roleNameString.includes('ADMIN');
     if (!isAdmin) return false;
 
     let session = getAdminSession(jid);
@@ -112,7 +111,8 @@ const handleAdminMessage = async (sock, msg, bodyText = '') => {
             ];
 
             // DISTRIBUTE MESSAGES
-            messages.forEach(msg => {
+            const msgArray = messages?.data || messages || [];
+            msgArray.forEach(msg => {
                 // If message belongs to a flow step
                 if (msg.flowStep && msg.flowStep.flowId) {
                     const flowGroup = groups[2].subGroups.find(g => g.id === msg.flowStep.flowId);
