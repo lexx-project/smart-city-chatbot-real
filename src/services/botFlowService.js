@@ -1,5 +1,6 @@
 const { nestClient } = require('../api/nestClient');
 const { getAdminToken, clearToken } = require('./adminAuthService');
+const FormData = require('form-data');
 
 // ── HELPER: Request dengan Auto-Retry jika 401 ──
 const requestWithRetry = async (method, url, data = null, params = {}) => {
@@ -122,21 +123,32 @@ const endRemoteSession = async (sessionId) => {
  * FIXED: Menerima 'phone' langsung dari controller. 
  * Tidak lagi membelah JID di sini biar nggak kena LID issue.
  */
-const logMessageToBackend = async (phone, content) => {
-    const payload = {
-        entry: [{
-            changes: [{
-                value: {
-                    messages: [{
-                        from: String(phone), // Pastikan nomor HP asli
-                        text: { body: String(content) } // Isi pesan
-                    }]
-                }
-            }]
-        }]
-    };
-    // Melaporkan ke Webhook BE untuk mencatat riwayat pesan & Total Chat
-    return await requestWithRetry('POST', '/conversation/webhook', payload);
+const logMessageToBackend = async (sessionId, sender, messageType, content) => {
+    if (!sessionId) return null;
+    try {
+        const payload = { sessionId, sender, messageType, content };
+        return await requestWithRetry('POST', '/messages', payload);
+    } catch (err) {
+        console.error('[LOG_MESSAGE_ERROR]', err.message);
+        return null;
+    }
+};
+
+const uploadImageToBackend = async (buffer, fileName) => {
+    try {
+        const form = new FormData();
+        form.append('file', buffer, { filename: fileName, contentType: 'image/jpeg' });
+        form.append('folder', 'samira/tickets');
+
+        const { nestClient } = require('../api/nestClient');
+        const res = await nestClient.post('/upload/single', form, {
+            headers: { ...form.getHeaders() }
+        });
+        return res.data?.secureUrl || res.data?.url || null;
+    } catch (err) {
+        console.error('[UPLOAD_IMAGE_ERROR]', err?.response?.data || err.message);
+        return null;
+    }
 };
 
 // ── BOT CONFIGURATION & FLOW ──
@@ -257,6 +269,7 @@ module.exports = {
     createRemoteSession,
     updateRemoteSessionState,
     logMessageToBackend,
+    uploadImageToBackend,
     endRemoteSession,
     getStaffData
 };

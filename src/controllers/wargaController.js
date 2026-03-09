@@ -22,6 +22,7 @@ const {
   createRemoteSession,
   endRemoteSession,
   getStaffData,
+  uploadImageToBackend,
 } = require("../services/botFlowService");
 const { getAdminSession } = require("../services/adminSessionService");
 const { resolvePhoneFromLid } = require("../services/lidService");
@@ -103,9 +104,6 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   console.log(`- Isi Pesan: ${normalizedText}`);
   console.log("==========================================");
 
-  // 1. SETOR CHAT (Biar Kategori/History masuk ke Dashboard)
-  await logMessageToBackend(phone, normalizedText);
-
   const staffData = await getStaffData(phone);
 
   // MASUKIN BARIS INI LEXX! Biar kita tau isi perut Backend lu:
@@ -138,6 +136,21 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       createRemoteSession(phone)
     ]);
 
+    // FIX: Cegah lanjut kalau session BE gagal dibikin!
+    if (!beSessionId) {
+      console.error("[WARGA CONTROLLER] Gagal membuat remote session di Backend (beSessionId null/timeout).");
+      if (!isSuperOrAdmin) {
+        await sock.sendMessage(jid, {
+          text: "⚠️ *Mohon Maaf*\nSistem kami sedang mengalami kepadatan/gangguan koneksi. Silakan sapa bot kembali dalam beberapa menit ke depan.",
+        });
+      } else {
+        await sock.sendMessage(jid, {
+          text: "⚠️ *[ADMIN WARNING]*\nGagal terhubung ke Backend (Endpoint Sessions Timeout). Cek koneksi API.",
+        });
+      }
+      return true; // Hentikan proses, jangan lanjut kirim menu
+    }
+
     const rawMenu = await getMainMenu();
     const mainMenu = rawMenu?.data || rawMenu;
 
@@ -155,12 +168,15 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     session.beSessionId = beSessionId; // Simpan ID Sesi dari Backend ke memori Bot
     updateSession(jid, { beSessionId }); // Pastikan tersimpan dengan benar di memori
 
+    await logMessageToBackend(beSessionId, 'USER', 'TEXT', normalizedText);
+
     let msgToSend = adminSettings.GREETING_MSG
       ? `${adminSettings.GREETING_MSG}\n\n`
       : "";
     msgToSend += buildMenuMessage(mainMenu);
 
     await sock.sendMessage(jid, { text: msgToSend });
+    await logMessageToBackend(beSessionId, 'BOT', 'TEXT', msgToSend);
     return true;
   }
 
@@ -181,37 +197,49 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
   const children = currentStep.children || [];
   let nextStepId = null;
+  let errorMsg = null;
+  let captionText = "";
 
   if (currentStep.id !== "root_menu" && currentStep.stepKey !== "main_menu") {
     const isSelectMode = children.length > 1;
 
     if (!isSelectMode) {
       let finalAnswer = normalizedText;
-      let errorMsg = null;
 
       // Cek apakah pesan yang masuk adalah gambar
       const rawMsg = unwrapMessage(msg?.message || {});
       const isImage = !!rawMsg?.imageMessage;
+      // Jika tidak ada caption, gunakan teks default
+      captionText = rawMsg?.imageMessage?.caption?.trim() || "Tanpa Keterangan";
 
-      // BYPASS: Jika inputType "number" TAPI user mengirim gambar
-      if (currentStep.inputType === "number" && isImage) {
-        try {
-          const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console });
-          const fileName = `evidence_${Date.now()}.jpg`;
-          const uploadDir = path.join(process.cwd(), 'uploads');
+      // BYPASS: Jika inputType "report"
+      if (currentStep.inputType === "report") {
+        if (!isImage) {
+          // HANYA tolak jika yang dikirim BUKAN gambar (misal: cuma teks)
+          errorMsg = "⚠️ *Format Tidak Sesuai*\n\nMohon kirimkan lampiran FOTO sebagai bukti laporan Anda. Keterangan teks bersifat opsional.";
+        } else {
+          try {
+            await sock.sendMessage(jid, { text: "⏳ _Mengunggah foto ke server..._" });
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console });
+            const fileName = `evidence_${Date.now()}.jpg`;
 
-          if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
+            // Upload ke BE
+            const secureUrl = await uploadImageToBackend(buffer, fileName);
+
+            if (secureUrl) {
+              finalAnswer = `[FOTO TERLAMPIR] ${captionText}`;
+              session.imageUrl = secureUrl; // Simpan URL untuk payload tiket
+              session.answers[currentStep.stepKey] = finalAnswer;
+            } else {
+              errorMsg = "⚠️ Gagal mengunggah gambar ke server. Silakan coba kirim ulang.";
+            }
+          } catch (err) {
+            console.error("[DOWNLOAD/UPLOAD_ERROR]", err);
+            errorMsg = "⚠️ Terjadi kesalahan saat memproses gambar.";
           }
-
-          fs.writeFileSync(path.join(uploadDir, fileName), buffer);
-          finalAnswer = `[LAMPIRAN FOTO] ${fileName}`;
-        } catch (err) {
-          console.error("[DOWNLOAD_ERROR]", err);
-          errorMsg = "⚠️ Gagal menyimpan gambar. Silakan coba kirim ulang.";
         }
       } else {
-        // Jika bukan gambar, jalankan validasi normal
+        // Jika bukan "report", jalankan validasi normal
         errorMsg = validateInput(
           normalizedText,
           currentStep.inputType,
@@ -221,13 +249,24 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
       if (errorMsg) {
         await sock.sendMessage(jid, { text: errorMsg });
+        if (session && session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', errorMsg);
+        }
         updateSession(jid);
         return true;
       }
 
       // Simpan jawaban (teks normal atau nama file gambar)
-      session.answers[currentStep.stepKey] = finalAnswer;
+      if (currentStep.inputType !== "report") {
+        session.answers[currentStep.stepKey] = finalAnswer;
+      }
     }
+  }
+
+  if (session && session.beSessionId && currentStep.inputType !== "report") {
+    await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', normalizedText);
+  } else if (session && session.beSessionId && currentStep.inputType === "report" && !errorMsg) {
+    await logMessageToBackend(session.beSessionId, 'USER', 'IMAGE', `[GAMBAR DIUNGGAH] ${captionText}`);
   }
 
   // TENTUKAN LANGKAH BERIKUTNYA
@@ -242,9 +281,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       );
 
       if (!selectedChild) {
-        await sock.sendMessage(jid, {
-          text: "❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai.",
-        });
+        const errMsg = "❌ Pilihan tidak valid. Silakan balas dengan angka yang sesuai.";
+        await sock.sendMessage(jid, { text: errMsg });
+        if (session && session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', errMsg);
+        }
         updateSession(jid);
         return true;
       }
@@ -288,9 +329,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       }
 
       if (!isValid) {
-        await sock.sendMessage(jid, {
-          text: `⚠️ *Format Tidak Sesuai*\n\nMohon masukkan data sesuai format yang diminta.`
-        });
+        const errMsg = `⚠️ *Format Tidak Sesuai*\n\nMohon masukkan data sesuai format yang diminta.`;
+        await sock.sendMessage(jid, { text: errMsg });
+        if (session && session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', errMsg);
+        }
         return true;
       }
     }
@@ -307,7 +350,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         if (matchedOption && matchedOption.nextStepKey) {
           targetNextStepKey = matchedOption.nextStepKey;
         } else {
-          await sock.sendMessage(jid, { text: "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka yang benar." });
+          const errMsg = "⚠️ Pilihan tidak tersedia. Silakan balas dengan angka yang benar.";
+          await sock.sendMessage(jid, { text: errMsg });
+          if (session && session.beSessionId) {
+            await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', errMsg);
+          }
           updateSession(jid);
           return true;
         }
@@ -321,10 +368,12 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     if (!targetNextStepKey) {
       if (isInfoOrSuccess) {
         const text = activeMsg.messageText || "Terima kasih.";
+        const finalText = `✅ ${text}`;
+        await sock.sendMessage(jid, { text: finalText });
         if (session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', finalText);
           await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
         }
-        await sock.sendMessage(jid, { text: `✅ ${text}` });
         endSession(jid);
         return true;
       }
@@ -334,10 +383,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       if (!dbNextStep) {
         forceTicketCreation = !isInfoOrSuccess;
         if (isInfoOrSuccess) {
+          await sock.sendMessage(jid, { text: activeMsg.messageText });
           if (session.beSessionId) {
+            await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', activeMsg.messageText);
             await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
           }
-          await sock.sendMessage(jid, { text: activeMsg.messageText });
           endSession(jid);
           return true;
         }
@@ -373,20 +423,26 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         description: JSON.stringify(session.answers, null, 2),
         userId,
         categoryId,
+        sessionId: session.beSessionId,
+        ...(session.imageUrl && { imageUrl: session.imageUrl })
       };
 
       const result = await submitTicket(ticketPayload);
       const closingMsg = adminSettings.SESSION_END_TEXT || "Terima kasih, laporan Anda telah berhasil dicatat.";
 
       if (result) {
+        const finalText = `✅ *BERHASIL*\n\n${closingMsg}`;
+        await sock.sendMessage(jid, { text: finalText });
         if (session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', finalText);
           await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
         }
-        await sock.sendMessage(jid, { text: `✅ *BERHASIL*\n\n${closingMsg}` });
       } else {
-        await sock.sendMessage(jid, {
-          text: "⚠️ Laporan diterima, namun terjadi kendala saat menyimpan ke sistem. Tim kami akan menindaklanjuti.",
-        });
+        const errText = "⚠️ Laporan diterima, namun terjadi kendala saat menyimpan ke sistem. Tim kami akan menindaklanjuti.";
+        await sock.sendMessage(jid, { text: errText });
+        if (session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', errText);
+        }
       }
 
       endSession(jid);
@@ -412,16 +468,20 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
 
   if (isNextInfoOrSuccess) {
+    await sock.sendMessage(jid, { text: nextMsg });
     if (session.beSessionId) {
+      await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', nextMsg);
       await endRemoteSession(session.beSessionId).catch(err => console.error("[REMOTE_SESSION] Gagal tutup:", err.message));
     }
-    await sock.sendMessage(jid, { text: nextMsg });
     endSession(jid);
     return true;
   }
 
   updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
   await sock.sendMessage(jid, { text: nextMsg });
+  if (session.beSessionId) {
+    await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', nextMsg);
+  }
   return true;
 };
 

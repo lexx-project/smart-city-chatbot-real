@@ -76,7 +76,6 @@ const registerRoutes = (sock) => {
                 // ── STATS COMMAND (/stats) ──
                 if ((isAdmin || isSuperOrAdmin) && bodyText.toLowerCase().startsWith('/stats')) {
                     console.log(`[PID:${process.pid}] [ROUTER] /stats command from admin ${phone}`);
-                    await handleStatsCommand(sock, msg, jid);
                     handledByAdmin = true;
                     continue;
                 }

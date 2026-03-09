@@ -367,6 +367,22 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
             console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
             // Best-effort — don't abort
         }
+
+        try {
+            const citizenPhone = ticket.user?.phoneNumber || ticket.user?.phone;
+            if (citizenPhone && newStatus === 'IN_PROGRESS') {
+                const citizenJid = citizenPhone.includes('@s.whatsapp.net') ? citizenPhone : `${citizenPhone.replace(/\D/g, '')}@s.whatsapp.net`;
+                const notifWarga =
+                    `📢 *UPDATE LAPORAN ANDA*\n` +
+                    `-------------------------\n` +
+                    `Halo ${ticket.user?.fullName || 'Warga'},\n\n` +
+                    `Laporan Anda dengan nomor tiket *${ticketNumber}* (${kat}) saat ini *SEDANG DIKERJAKAN* oleh petugas kami di lapangan (${staffName}).\n\n` +
+                    `Kami akan memberikan kabar selanjutnya setelah penanganan selesai. Terima kasih.`;
+
+                await sock.sendMessage(citizenJid, { text: notifWarga });
+                console.log(`[NOTIF_WARGA] Sent IN_PROGRESS to ${citizenJid}`);
+            }
+        } catch (err) { console.error("Gagal notif warga:", err.message); }
         return;
     }
 
@@ -407,6 +423,23 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
             } catch (notifErr) {
                 console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
             }
+
+            try {
+                const kat = ticket.category?.name || ticket.category?.title || 'Layanan Publik';
+                const citizenPhone = ticket.user?.phoneNumber || ticket.user?.phone;
+                if (citizenPhone) {
+                    const citizenJid = citizenPhone.includes('@s.whatsapp.net') ? citizenPhone : `${citizenPhone.replace(/\D/g, '')}@s.whatsapp.net`;
+                    const notifWarga =
+                        `✅ *LAPORAN SELESAI*\n` +
+                        `-------------------------\n` +
+                        `Halo ${ticket.user?.fullName || 'Warga'},\n\n` +
+                        `Laporan Anda dengan nomor tiket *${ticketNumber}* (${kat}) telah *SELESAI DITANGANI* oleh tim kami.\n\n` +
+                        `Berikut adalah foto bukti penanganan dari lokasi. Terima kasih atas partisipasi Anda membangun kota!`;
+
+                    await sock.sendMessage(citizenJid, { image: buffer, caption: notifWarga });
+                    console.log(`[NOTIF_WARGA] Sent RESOLVED with image to ${citizenJid}`);
+                }
+            } catch (err) { console.error("Gagal notif warga:", err.message); }
         } catch (err) {
             console.error(`${PID} [DINAS] Evidence upload error:`, err?.response?.data || err?.message);
             await sock.sendMessage(jid, { text: 'Terjadi kesalahan saat memproses bukti foto. Silakan coba kembali.' });
