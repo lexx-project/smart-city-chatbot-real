@@ -5,14 +5,12 @@ const { handleCekTugasCommand, handleCekTugasSession } = require('../controllers
 const { handleTugaskuCommand, handleTugaskuSession } = require('../controllers/dinasController');
 const { logIncomingChat } = require('../utils/logger');
 const { extractBodyText, shouldSkipMessage, isStaleMessage } = require('../middlewares/messageMiddleware');
-const { checkIsAdmin } = require('../services/adminService');
-const { getAdminSession, loginStaffWa, getAuthenticatedStaff } = require('../services/adminSessionService');
+const { getAdminSession } = require('../services/adminSessionService');
 
+// SENJATA AUTO-DETECT
+const { resolvePhoneFromLid } = require('../services/lidService');
+const { getStaffData } = require('../services/botFlowService');
 
-// ═══════════════════════════════════════════════════════
-//  GLOBAL MESSAGE LOCKING — Mencegah double-processing
-//  dari Baileys race condition / duplicate event trigger
-// ═══════════════════════════════════════════════════════
 const processedMessageIds = new Set();
 
 const registerRoutes = (sock) => {
@@ -21,14 +19,12 @@ const registerRoutes = (sock) => {
         if (!Array.isArray(messages) || messages.length === 0) return;
 
         for (const msg of messages) {
-            // ── GLOBAL DEDUP: Cek & lock message ID ──
             const msgId = msg?.key?.id;
             if (msgId) {
                 if (processedMessageIds.has(msgId)) continue;
                 processedMessageIds.add(msgId);
                 setTimeout(() => processedMessageIds.delete(msgId), 5_000);
             }
-
 
             let handledByAdmin = false;
 
@@ -46,33 +42,24 @@ const registerRoutes = (sock) => {
                 const bodyText = extractBodyText(msg);
                 msg.bodyText = bodyText;
 
-                // 1. Handle Login Command
-                if (bodyText.startsWith('/login ')) {
-                    const parts = bodyText.split(' ');
-                    if (parts.length < 3) {
-                        await sock.sendMessage(jid, { text: '❌ Format: /login <email> <password>' });
-                        continue;
-                    }
-                    await sock.sendMessage(jid, { text: '⏳ Memverifikasi kredensial ke server...' });
-                    const res = await loginStaffWa(jid, parts[1], parts[2]);
-                    if (res.success) {
-                        await sock.sendMessage(jid, { text: `✅ Berhasil! Selamat datang ${res.name} (${res.role}).` });
-                    } else {
-                        await sock.sendMessage(jid, { text: `❌ Login Gagal: ${res.message}` });
-                    }
-                    continue;
+                // ── 1. RESOLVE NOMOR HP (LID TO REAL PHONE) ──
+                const local = jid.split('@')[0];
+                let phone = local;
+                if (jid.endsWith('@lid')) {
+                    const resolved = await resolvePhoneFromLid(local);
+                    if (resolved) phone = resolved;
                 }
 
-                // 2. Identify Admin Status from Session
-                const staff = getAuthenticatedStaff(jid);
-                const isAdmin = staff && staff.role && staff.role.includes('ADMIN');
-                const isSuperOrAdmin = isAdmin;
+                // ── 2. AUTO-DETECT ADMIN / STAFF (Tanpa /login) ──
+                const staffData = await getStaffData(phone);
 
-                // ── TICKET COMMAND (/tiket or /tiket <status>) ──
-                // Must run BEFORE handleAdminMessage so the ticket session
-                // is never intercepted by adminController.
+                const isAdmin = staffData && staffData.roleNameString && staffData.roleNameString.includes('ADMIN');
+                const isSuperOrAdmin = isAdmin;
+                const isStaff = staffData && staffData.roleNameString;
+
+                // ── TICKET COMMAND (/tiket) ──
                 if ((isAdmin || isSuperOrAdmin) && (bodyText === '/tiket' || bodyText.toLowerCase().startsWith('/tiket '))) {
-                    console.log(`[PID:${process.pid}] [ROUTER] /tiket command from admin ${jid}`);
+                    console.log(`[PID:${process.pid}] [ROUTER] /tiket command from admin ${phone}`);
                     await handleTicketCommand(sock, msg, jid, bodyText);
                     handledByAdmin = true;
                     continue;
@@ -80,7 +67,7 @@ const registerRoutes = (sock) => {
 
                 // ── CEKTUGAS COMMAND (/cektugas) ──
                 if ((isAdmin || isSuperOrAdmin) && bodyText.toLowerCase().startsWith('/cektugas')) {
-                    console.log(`[PID:${process.pid}] [ROUTER] /cektugas command from admin ${jid}`);
+                    console.log(`[PID:${process.pid}] [ROUTER] /cektugas command from admin ${phone}`);
                     await handleCekTugasCommand(sock, msg, jid);
                     handledByAdmin = true;
                     continue;
@@ -88,17 +75,18 @@ const registerRoutes = (sock) => {
 
                 // ── STATS COMMAND (/stats) ──
                 if ((isAdmin || isSuperOrAdmin) && bodyText.toLowerCase().startsWith('/stats')) {
-                    console.log(`[PID:${process.pid}] [ROUTER] /stats command from admin ${jid}`);
+                    console.log(`[PID:${process.pid}] [ROUTER] /stats command from admin ${phone}`);
                     await handleStatsCommand(sock, msg, jid);
                     handledByAdmin = true;
                     continue;
                 }
 
-                // ── TUGASKU COMMAND (/tugasku) ── Dinas/Staff only, no admin check
-                if (bodyText.toLowerCase().startsWith('/tugasku')) {
+                // ── TUGASKU COMMAND (/tugasku) ── 
+                if (isStaff && bodyText.toLowerCase().startsWith('/tugasku')) {
                     console.log(`[PID:${process.pid}] [ROUTER] /tugasku command | jid=${jid}`);
-                    await handleTugaskuCommand(sock, msg, jid);
-                    handledByAdmin = true; // prevent fall-through to warga
+                    // Lempar staffData ke dinasController
+                    await handleTugaskuCommand(sock, msg, jid, staffData);
+                    handledByAdmin = true;
                     continue;
                 }
 
@@ -112,8 +100,7 @@ const registerRoutes = (sock) => {
                 }
 
                 // ── TICKET SESSION REPLIES (TICKET_FLOW) ──
-                // Check step prefix so this catches WAITING_TICKET_* and WAITING_STATUS_* states.
-                const ticketSession = anySession; // reuse — already fetched above
+                const ticketSession = anySession;
                 if ((isAdmin || isSuperOrAdmin) && ticketSession && (
                     ticketSession.step === 'SELECT_TICKET_STATUS' ||
                     ticketSession.step.startsWith('WAITING_TICKET_') ||
@@ -136,11 +123,10 @@ const registerRoutes = (sock) => {
                 }
 
                 // ── ADMIN FLOW (CMS, buildmenu, etc.) ──
-                handledByAdmin = await handleAdminMessage(sock, msg, bodyText);
+                handledByAdmin = await handleAdminMessage(sock, msg, bodyText, staffData);
                 if (handledByAdmin) continue;
 
                 // ── ADMIN SESSION GUARD ──
-                // Jika admin punya sesi aktif (CMS, buildmenu, dll.), JANGAN teruskan ke wargaController
                 const adminSession = getAdminSession(jid);
                 if (adminSession) {
                     console.log(`[ROUTER] Admin ${jid} punya sesi aktif (step: ${adminSession.step}), skip wargaController`);
@@ -150,11 +136,11 @@ const registerRoutes = (sock) => {
                 if (!bodyText) continue;
                 logIncomingChat(msg, 'WARGA');
 
-                await handleWargaMessage(sock, msg, bodyText);
+                // ── WARGA FLOW ──
+                await handleWargaMessage(sock, msg, bodyText, staffData);
 
             } catch (error) {
                 console.error('[ROUTER_MESSAGE_ERROR]', error);
-                // Jika error terjadi di flow admin, JANGAN trigger apapun
                 if (handledByAdmin) continue;
             }
         }

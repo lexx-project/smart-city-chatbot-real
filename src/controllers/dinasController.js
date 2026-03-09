@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 /**
  * dinasController.js
  * and notify the admin of status updates.
@@ -55,6 +58,21 @@ const jidToPhone = (jid) => String(jid || '').split('@')[0];
 const humanizeKey = (key) => {
     let clean = key.replace(/^ask_[a-z0-9]+_/i, '').replace(/_/g, ' ');
     return clean.charAt(0).toUpperCase() + clean.slice(1);
+};
+
+const extractImagePath = (rawDescription) => {
+    if (!rawDescription) return null;
+    try {
+        const parsed = JSON.parse(rawDescription);
+        for (const val of Object.values(parsed)) {
+            if (typeof val === 'string' && val.includes('[LAMPIRAN FOTO]')) {
+                const fileName = val.split('[LAMPIRAN FOTO]')[1].trim();
+                const fullPath = path.join(process.cwd(), 'uploads', fileName);
+                if (fs.existsSync(fullPath)) return fullPath;
+            }
+        }
+    } catch (e) { }
+    return null;
 };
 
 const formatDesc = (raw) => {
@@ -212,7 +230,13 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
             data: { ...session.data, selectedTask: chosen },
         });
 
-        await sock.sendMessage(jid, { text: detail });
+        const imagePath = extractImagePath(ticket.description);
+
+        if (imagePath) {
+            await sock.sendMessage(jid, { image: { url: imagePath }, caption: detail });
+        } else {
+            await sock.sendMessage(jid, { text: detail });
+        }
         return;
     }
 

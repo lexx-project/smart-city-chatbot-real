@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 const { getTickets, getTicketById, updateTicketStatus, getStaffList, assignTicket, getAdminUserId } = require('../services/ticketService');
 const {
     startAdminSession,
@@ -52,6 +55,21 @@ const TICKET_STATUS_MENU =
 
 const unwrap = (res) => res?.data?.data ?? res?.data ?? res;
 
+const extractImagePath = (rawDescription) => {
+    if (!rawDescription) return null;
+    try {
+        const parsed = JSON.parse(rawDescription);
+        for (const val of Object.values(parsed)) {
+            if (typeof val === 'string' && val.includes('[LAMPIRAN FOTO]')) {
+                const fileName = val.split('[LAMPIRAN FOTO]')[1].trim();
+                const fullPath = path.join(process.cwd(), 'uploads', fileName);
+                if (fs.existsSync(fullPath)) return fullPath;
+            }
+        }
+    } catch (e) { }
+    return null;
+};
+
 const formatToJid = (phone) => {
     const digits = String(phone || '').replace(/\D/g, '');
     return digits ? `${digits}@s.whatsapp.net` : null;
@@ -78,14 +96,24 @@ const parseDescription = (raw) => {
 
 const shortPreview = (raw) => {
     if (!raw) return 'Tidak ada keterangan';
-    let text = '';
     try {
         const parsed = JSON.parse(raw);
-        text = Object.values(parsed).filter(Boolean).join('; ');
+        // Ambil value yang bukan sekadar pilihan ganda (angka/huruf < 3) dan bukan teks lampiran
+        const meaningfulTexts = Object.values(parsed).filter(val => {
+            if (!val) return false;
+            const strVal = String(val).trim();
+            if (strVal.length <= 2) return false; // Abaikan jawaban "1", "2", "ya", dll
+            if (strVal.includes('[LAMPIRAN FOTO]')) return false; // Sembunyikan nama file dari preview
+            return true;
+        });
+
+        if (meaningfulTexts.length === 0) return 'Ada lampiran foto / pilihan';
+
+        const text = meaningfulTexts.join(' | ');
+        return text.length > 50 ? text.substring(0, 50) + '...' : text;
     } catch {
-        text = raw;
+        return raw.length > 50 ? raw.substring(0, 50) + '...' : raw;
     }
-    return text.length > 60 ? text.substring(0, 60) + '...' : text;
 };
 
 const formatTicketDetail = (ticket) => {
@@ -119,12 +147,14 @@ const buildTicketList = (tickets, statusLabel) => {
     tickets.forEach((t, idx) => {
         const num = t.ticketNumber || t.id || '-';
         const kat = t.category?.name || t.category?.title || 'Layanan Publik';
+        const pelapor = t.user?.fullName || t.user?.name || t.reporterName || 'Warga';
         const preview = shortPreview(t.description);
-        reply += `${idx + 1}. [${num}] ${kat}\n   ${preview}\n\n`;
+
+        reply += `*${idx + 1}. [${num}] ${kat}*\n👤 Pelapor: ${pelapor}\n📝 _${preview}_\n\n`;
     });
     reply += '-------------------------\n';
-    reply += 'Balas dengan nomor urut tiket untuk melihat detail.\n';
-    reply += 'Ketik /cancel untuk membatalkan.';
+    reply += '👉 Balas dengan nomor urut tiket untuk melihat detail.\n';
+    reply += '🛑 Ketik /cancel untuk membatalkan.';
     return reply;
 };
 
@@ -229,7 +259,14 @@ const handleTicketSession = async (sock, msg, jid, text, session) => {
             data: { ...session.data, ticketId, ticket },
         });
 
-        await sock.sendMessage(jid, { text: formatTicketDetail(ticket) });
+        const detailText = formatTicketDetail(ticket);
+        const imagePath = extractImagePath(ticket.description);
+
+        if (imagePath) {
+            await sock.sendMessage(jid, { image: { url: imagePath }, caption: detailText });
+        } else {
+            await sock.sendMessage(jid, { text: detailText });
+        }
         return;
     }
 
