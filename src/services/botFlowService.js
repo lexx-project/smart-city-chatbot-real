@@ -43,6 +43,39 @@ const requestWithRetry = async (method, url, data = null, params = {}) => {
     }
 };
 
+let cachedFlows = [];
+
+const syncFlowsCache = async () => {
+    try {
+        console.log("[CACHE] 🔄 Memulai sinkronisasi data Flow dari CMS...");
+        let page = 1;
+        let hasNextPage = true;
+        let allFlows = [];
+
+        while (hasNextPage) {
+            const res = await requestWithRetry('GET', '/cms/bot-flow/flows', null, { limit: 100, page: page });
+            const list = res?.data || [];
+
+            if (Array.isArray(list)) {
+                allFlows = allFlows.concat(list);
+            }
+
+            hasNextPage = res?.meta?.hasNextPage || false;
+            page++;
+        }
+
+        if (allFlows.length > 0) {
+            cachedFlows = allFlows;
+            console.log(`[CACHE] ✅ Sinkronisasi sukses! ${cachedFlows.length} Flows tersimpan di memori.`);
+        }
+    } catch (error) {
+        console.error("[CACHE] ❌ Sinkronisasi gagal:", error?.message || error);
+    }
+};
+
+syncFlowsCache(); // Tarikan pertama saat booting
+setInterval(syncFlowsCache, 5 * 60 * 1000); // Polling setiap 5 menit
+
 // ── USER SYNC (Target PM: Data Contact) ──
 
 const getOrCreateUser = async (phone, name) => {
@@ -109,7 +142,7 @@ const logMessageToBackend = async (phone, content) => {
 // ── BOT CONFIGURATION & FLOW ──
 
 const getBotSettings = async () => {
-    const res = await requestWithRetry('GET', '/cms/bot-flow/messages', null, { limit: 50 });
+    const res = await requestWithRetry('GET', '/cms/bot-flow/messages', null, { limit: 100 });
     const messages = res?.data || [];
     const greetingMsg = messages.find(m => m.messageKey === 'GREETING_MSG' || m.messageKey === 'greeting');
     const endMsg = messages.find(m => m.messageKey === 'SESSION_END_TEXT' || m.messageKey === 'end_session');
@@ -142,24 +175,23 @@ const getMainMenu = async () => {
 const getStep = async (stepIdOrKey) => {
     if (stepIdOrKey === 'root_menu') return await getMainMenu();
 
-    // 1. Cari di daftar steps (limit 100)
-    const res = await requestWithRetry('GET', '/cms/bot-flow/steps', null, { limit: 100 });
-    const steps = res?.data || [];
-    let step = steps.find(s => s.id === stepIdOrKey || s.stepKey === stepIdOrKey);
+    let foundStep = null;
 
-    // 2. FIX: Jika tidak ketemu, berarti ID ini kemungkinan besar adalah FLOW ID
-    if (!step) {
-        console.log(`[DEBUG] ID ${stepIdOrKey} tidak ada di Steps, mencoba cari di detail Flow...`);
-        const flowDetail = await requestWithRetry('GET', `/cms/bot-flow/flows/${stepIdOrKey}`);
-        const data = flowDetail?.data || flowDetail;
-
-        if (data && data.steps) {
-            // Ambil langkah pertama (stepOrder 1) dari flow tersebut
-            step = data.steps.find(s => s.stepOrder === 1) || data.steps[0];
+    for (const flow of cachedFlows) {
+        if (flow.steps && Array.isArray(flow.steps)) {
+            foundStep = flow.steps.find(s => s.id === stepIdOrKey || s.stepKey === stepIdOrKey);
+            if (foundStep) break;
         }
     }
 
-    return step || null;
+    if (!foundStep) {
+        const targetFlow = cachedFlows.find(f => f.id === stepIdOrKey);
+        if (targetFlow && targetFlow.steps && Array.isArray(targetFlow.steps)) {
+            foundStep = targetFlow.steps.find(s => s.stepOrder === 1) || targetFlow.steps[0];
+        }
+    }
+
+    return foundStep || null;
 };
 
 const submitTicket = async (payload) => requestWithRetry('POST', '/tickets', payload);
@@ -179,29 +211,35 @@ const createCmsFlow = (payload) => requestWithRetry('POST', '/cms/bot-flow/flows
 const createCmsStep = (payload) => requestWithRetry('POST', '/cms/bot-flow/steps', payload);
 
 const getStaffData = async (phone) => {
-    // FIX FINAL: Kita nggak usah pake parameter 'search' ke BE. 
-    // Kita tarik aja 100 data staff pertama, trus filter di Bot!
-    const res = await requestWithRetry('GET', '/staff', null, { limit: 100 });
-    const list = res?.data || res;
+    let page = 1;
+    let hasNextPage = true;
 
-    if (Array.isArray(list) && list.length > 0) {
-        // Biar Bot lu yang nyari nomornya secara manual
-        const user = list.find(u => String(u.phone) === String(phone));
+    while (hasNextPage) {
+        const res = await requestWithRetry('GET', '/staff', null, { limit: 100, page: page });
+        const list = res?.data || res;
 
-        if (user) {
-            let roleName = '';
-            if (typeof user.role === 'string') {
-                roleName = user.role;
-            } else if (typeof user.role === 'object' && user.role !== null) {
-                roleName = user.role.name || '';
-            }
+        if (Array.isArray(list) && list.length > 0) {
+            const user = list.find(u => String(u.phone) === String(phone));
 
-            if (['ADMIN', 'SUPER_ADMIN', 'STAFF'].includes(roleName.toUpperCase())) {
-                user.roleNameString = roleName.toUpperCase();
-                return user; // KETEMU!
+            if (user) {
+                let roleName = '';
+                if (typeof user.role === 'string') {
+                    roleName = user.role;
+                } else if (typeof user.role === 'object' && user.role !== null) {
+                    roleName = user.role.name || '';
+                }
+
+                if (['ADMIN', 'SUPER_ADMIN', 'STAFF'].includes(roleName.toUpperCase())) {
+                    user.roleNameString = roleName.toUpperCase();
+                    return user; // KETEMU! (hentikan loop)
+                }
             }
         }
+
+        hasNextPage = res?.meta?.hasNextPage || false;
+        page++;
     }
+
     return null;
 };
 
