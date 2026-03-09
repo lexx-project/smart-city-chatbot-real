@@ -1,3 +1,7 @@
+const { downloadMediaMessage } = require("@whiskeysockets/baileys");
+const fs = require("fs");
+const path = require("path");
+const { unwrapMessage } = require("../middlewares/messageMiddleware");
 const {
   getSession,
   startSession,
@@ -182,17 +186,47 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     const isSelectMode = children.length > 1;
 
     if (!isSelectMode) {
-      const errorMsg = validateInput(
-        normalizedText,
-        currentStep.inputType,
-        currentStep.validationRule,
-      );
+      let finalAnswer = normalizedText;
+      let errorMsg = null;
+
+      // Cek apakah pesan yang masuk adalah gambar
+      const rawMsg = unwrapMessage(msg?.message || {});
+      const isImage = !!rawMsg?.imageMessage;
+
+      // BYPASS: Jika inputType "number" TAPI user mengirim gambar
+      if (currentStep.inputType === "number" && isImage) {
+        try {
+          const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console });
+          const fileName = `evidence_${Date.now()}.jpg`;
+          const uploadDir = path.join(process.cwd(), 'uploads');
+
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+
+          fs.writeFileSync(path.join(uploadDir, fileName), buffer);
+          finalAnswer = `[LAMPIRAN FOTO] ${fileName}`;
+        } catch (err) {
+          console.error("[DOWNLOAD_ERROR]", err);
+          errorMsg = "⚠️ Gagal menyimpan gambar. Silakan coba kirim ulang.";
+        }
+      } else {
+        // Jika bukan gambar, jalankan validasi normal
+        errorMsg = validateInput(
+          normalizedText,
+          currentStep.inputType,
+          currentStep.validationRule,
+        );
+      }
+
       if (errorMsg) {
         await sock.sendMessage(jid, { text: errorMsg });
         updateSession(jid);
         return true;
       }
-      session.answers[currentStep.stepKey] = normalizedText;
+
+      // Simpan jawaban (teks normal atau nama file gambar)
+      session.answers[currentStep.stepKey] = finalAnswer;
     }
   }
 

@@ -48,16 +48,22 @@ const extractBodyText = (msg) => {
             bodyText = '';
         }
     } else {
-        bodyText = (
-            rawMessage?.conversation ||
-            rawMessage?.extendedTextMessage?.text ||
-            rawMessage?.imageMessage?.caption ||
-            rawMessage?.videoMessage?.caption ||
-            rawMessage?.buttonsResponseMessage?.selectedDisplayText ||
-            rawMessage?.listResponseMessage?.title ||
-            rawMessage?.templateButtonReplyMessage?.selectedDisplayText ||
-            ''
-        ).trim();
+        if (rawMessage?.imageMessage) {
+            bodyText = rawMessage.imageMessage.caption || '[LAMPIRAN GAMBAR]';
+        } else if (rawMessage?.videoMessage) {
+            bodyText = rawMessage.videoMessage.caption || '[LAMPIRAN VIDEO]';
+        } else if (rawMessage?.documentMessage) {
+            bodyText = rawMessage.documentMessage.fileName || '[LAMPIRAN DOKUMEN]';
+        } else {
+            bodyText = (
+                rawMessage?.conversation ||
+                rawMessage?.extendedTextMessage?.text ||
+                rawMessage?.buttonsResponseMessage?.selectedDisplayText ||
+                rawMessage?.listResponseMessage?.title ||
+                rawMessage?.templateButtonReplyMessage?.selectedDisplayText ||
+                ''
+            ).trim();
+        }
     }
 
     return bodyText;
