@@ -9,6 +9,8 @@ const path = require('path');
  */
 
 const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { nestClient } = require('../api/nestClient');
+const { getAdminToken } = require('../services/adminAuthService');
 
 const { getStaffList, getTickets, updateTicketStatus, addTicketAttachment } = require('../services/ticketService');
 const {
@@ -20,6 +22,7 @@ const {
 } = require('../services/adminSessionService');
 const { listAdminJids } = require('../services/adminService');
 const { resolvePhoneFromLid } = require('../services/lidService');
+const { getStaffData } = require('../services/botFlowService');
 
 const PID = `[PID:${process.pid}]`;
 
@@ -47,6 +50,44 @@ const ACTIVE_STATUSES = ['OPEN', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
 // ══════════════════════════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════════════════════════
+
+const notifyAdmins = async (sock, payload) => {
+    try {
+        console.log("[NOTIF_ADMIN] Mencari daftar admin untuk pengiriman notifikasi...");
+
+        // Ambil token dan tembak langsung ke endpoint staff pake nestClient
+        const token = await getAdminToken();
+        const res = await nestClient.get('/staff', {
+            params: { limit: 100 },
+            headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const list = res.data?.data || res.data || [];
+
+        // Filter semua staff yang memiliki role ADMIN atau SUPER_ADMIN
+        const admins = list.filter(u => {
+            const roleName = typeof u.role === 'string' ? u.role : (u.role?.name || '');
+            return roleName.toUpperCase().includes('ADMIN') && u.phone;
+        });
+
+        if (admins.length === 0) {
+            console.warn("[NOTIF_ADMIN] Tidak ditemukan user dengan role ADMIN di database.");
+            return;
+        }
+
+        for (const admin of admins) {
+            // Pastikan format JID benar
+            const jid = admin.phone.includes('@s.whatsapp.net')
+                ? admin.phone
+                : `${admin.phone.replace(/\D/g, '')}@s.whatsapp.net`;
+
+            await sock.sendMessage(jid, payload);
+            console.log(`[NOTIF_ADMIN] Notif terkirim ke ${admin.fullName} (${jid})`);
+        }
+    } catch (err) {
+        console.error("[NOTIF_ADMIN_ERROR] Gagal mengirim notifikasi ke admin:", err.message);
+    }
+};
 
 /**
  * Extract the exact string before '@' from a WhatsApp JID.
@@ -90,20 +131,31 @@ const formatDesc = (raw) => {
 
 const shortPreview = (raw) => {
     if (!raw) return 'Tidak ada keterangan';
-    let text = '';
     try {
-        text = Object.values(JSON.parse(raw)).filter(Boolean).join('; ');
+        const parsed = JSON.parse(raw);
+        // Filter: Hanya ambil teks bermakna (bukan angka pilihan/lampiran)
+        const meaningfulTexts = Object.values(parsed).filter(val => {
+            if (!val) return false;
+            const strVal = String(val).trim();
+            if (strVal.length <= 2) return false; // Abaikan angka pilihan
+            if (strVal.includes('[LAMPIRAN FOTO]')) return false; // Sembunyikan nama file
+            return true;
+        });
+
+        if (meaningfulTexts.length === 0) return 'Ada lampiran foto / pilihan';
+
+        const text = meaningfulTexts.join(' | ');
+        return text.length > 50 ? text.substring(0, 50) + '...' : text;
     } catch {
-        text = raw;
+        return raw.length > 50 ? raw.substring(0, 50) + '...' : raw;
     }
-    return text.length > 60 ? text.substring(0, 60) + '...' : text;
 };
 
 // ══════════════════════════════════════════════════════════
 //  COMMAND ENTRY POINT
 // ══════════════════════════════════════════════════════════
 
-const handleTugaskuCommand = async (sock, msg, jid) => {
+const handleTugaskuCommand = async (sock, msg, jid, staffData = null) => {
     console.log(`${PID} [DINAS] handleTugaskuCommand | jid=${jid}`);
 
     const existing = getAdminSession(jid);
@@ -111,18 +163,15 @@ const handleTugaskuCommand = async (sock, msg, jid) => {
 
     await sock.sendMessage(jid, { text: 'Sistem sedang memverifikasi identitas Anda. Mohon tunggu sebentar.' });
 
-    await sock.sendMessage(jid, { text: 'Sistem sedang memverifikasi identitas Anda. Mohon tunggu sebentar.' });
-
-    const authStaff = getAuthenticatedStaff(jid);
-
-    if (!authStaff) {
-        console.log(`[DINAS_DEBUG] Akses ditolak. JID: ${jid} belum login.`);
-        await sock.sendMessage(jid, { text: 'Akses ditolak. Anda belum login ke dalam sistem. Silakan ketik:\n\n/login <email> <password>' });
+    if (!staffData || !staffData.id) {
+        console.log(`[DINAS_DEBUG] Akses ditolak. JID: ${jid} bukan staff terdaftar.`);
+        await sock.sendMessage(jid, { text: 'Akses ditolak. Nomor Anda tidak terdaftar sebagai petugas.' });
         return;
     }
 
-    const me = authStaff;
-    console.log(`[DINAS_DEBUG] VERIFICATION SUCCESS! Name: ${me.name}, ID: ${me.id}, Role: ${me.role}`);
+    const me = staffData; // me.id dan me.name otomatis terisi dari BE
+
+    console.log(`[DINAS_DEBUG] VERIFICATION SUCCESS! Name: ${me.name || me.fullName}, ID: ${me.id}, Role: ${me.roleNameString || me.role}`);
 
     // ── Step 2: Fetch all tickets and filter for this staff ─
     await sock.sendMessage(jid, { text: 'Identitas terverifikasi. Mengambil daftar tugas Anda...' });
@@ -160,9 +209,11 @@ const handleTugaskuCommand = async (sock, msg, jid) => {
         taskMap[idx + 1] = { id: t.id, ticketNumber: t.ticketNumber || t.id, ticket: t };
         const num = t.ticketNumber || t.id || '-';
         const kat = t.category?.name || t.category?.title || 'Layanan Publik';
+        const pelapor = t.user?.fullName || t.user?.name || 'Warga';
         const preview = shortPreview(t.description);
         const status = STATUS_LABEL[t.status] || t.status;
-        reply += `${idx + 1}. [${num}] ${kat}\n   Status : ${status}\n   ${preview}\n\n`;
+
+        reply += `*${idx + 1}. [${num}] ${kat}*\n👤 Pelapor: ${pelapor}\n📌 Status: ${status}\n📝 _${preview}_\n\n`;
     });
     reply += '-------------------------\nBalas dengan angka urutan (contoh: 1) untuk memperbarui status tugas.\nKetik /cancel untuk membatalkan.';
 
@@ -310,9 +361,8 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
                 `Status Baru : ${statusLabel}\n\n` +
                 `Mohon pantau sistem untuk perkembangan selanjutnya.`;
 
-            const adminJid = listAdminJids()[0];
-            if (adminJid) await sock.sendMessage(adminJid, { text: notifAdmin });
-            console.log(`${PID} [DINAS] Admin notified | adminJid=${listAdminJids()[0]}`);
+            const notifContent = { text: notifAdmin };
+            await notifyAdmins(sock, notifContent);
         } catch (notifErr) {
             console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
             // Best-effort — don't abort
@@ -352,14 +402,8 @@ const handleTugaskuSession = async (sock, msg, jid, text, session) => {
 
             try {
                 const adminMsg = `✅ *Tugas Selesai!*\n-------------------------\nPetugas: ${staffName}\nTiket: ${tid}\nStatus: RESOLVED\n\nBerikut adalah foto bukti pengerjaan dari lapangan:`;
-                const adminJid = listAdminJids()[0];
-                if (adminJid) {
-                    await sock.sendMessage(adminJid, {
-                        image: buffer,
-                        caption: adminMsg
-                    });
-                }
-                console.log(`${PID} [DINAS] Admin notified with image buffer for resolved ticket | adminJid=${listAdminJids()[0]}`);
+                const notifContent = { image: buffer, caption: adminMsg };
+                await notifyAdmins(sock, notifContent);
             } catch (notifErr) {
                 console.error(`${PID} [DINAS] Admin notify failed:`, notifErr?.message);
             }
