@@ -104,7 +104,11 @@ const createRemoteSession = async (phoneNumber) => {
         phoneNumber: String(phoneNumber),
         provider: 'whatsapp'
     });
-    return res?.session?.id || res?.data?.session?.id || null;
+    console.log("=== [DEBUG SESSION] ===");
+    console.log(JSON.stringify(res, null, 2));
+    console.log("=======================");
+
+    return res?.data?.session?.id || res?.session?.id || res?.data?.id || res?.id || null;
 };
 
 const updateRemoteSessionState = async (sessionId, state = 'IN_FLOW') => {
