@@ -13,11 +13,76 @@ const {
 const { registerRoutes } = require('./src/routes');
 const apiRoutes = require('./src/api/routes');
 const { AUTH_DIR } = require('./settings');
+const { getTickets } = require('./src/services/ticketService');
+
+// Label Status untuk Notifikasi
+const STATUS_LABEL = {
+    ACCEPTED: 'Diterima',
+    IN_PROGRESS: 'Sedang Dikerjakan (IN_PROGRESS)',
+    RESOLVED: 'Selesai (RESOLVED)',
+    OPEN: 'Terbuka',
+    ASSIGNED: 'Ditugaskan ke Petugas',
+    REJECTED: 'Ditolak',
+    CLOSED: 'Ditutup'
+};
+
+// Memori untuk menyimpan status terakhir tiket
+const ticketStatusCache = new Map();
+let isPollingStarted = false;
 
 let currentSock = null;
 let isStarting = false;
 let reconnectTimer = null;
 let apiServer = null;
+
+const startTicketPolling = (sock) => {
+    if (isPollingStarted) return;
+    isPollingStarted = true;
+
+    console.log('[POLLING] Mesin pemantau tiket diaktifkan (Cek tiap 1 menit)...');
+
+    setInterval(async () => {
+        if (!sock) return;
+        try {
+            // Ambil 50 tiket terbaru dari Backend
+            const res = await getTickets({ limit: 50 });
+            const tickets = res?.data || res?.data?.data || [];
+
+            if (!Array.isArray(tickets)) return;
+
+            for (const ticket of tickets) {
+                const prevStatus = ticketStatusCache.get(ticket.id);
+
+                // Jika tiket sudah ada di memori dan statusnya BERUBAH
+                if (prevStatus && prevStatus !== ticket.status) {
+                    const citizenPhone = ticket.user?.phoneNumber || ticket.user?.phone;
+
+                    if (citizenPhone) {
+                        const jid = citizenPhone.includes('@s.whatsapp.net')
+                            ? citizenPhone
+                            : `${citizenPhone.replace(/\D/g, '')}@s.whatsapp.net`;
+
+                        const statusName = STATUS_LABEL[ticket.status] || ticket.status;
+                        const notifMsg =
+                            `📢 *UPDATE LAPORAN ANDA*\n` +
+                            `-------------------------\n` +
+                            `Halo ${ticket.user?.fullName || 'Warga'},\n\n` +
+                            `Laporan Anda dengan nomor tiket *${ticket.ticketNumber}* saat ini berstatus: *${statusName}*.\n\n` +
+                            `Terima kasih atas laporan Anda.`;
+
+                        await sock.sendMessage(jid, { text: notifMsg });
+                        console.log(`[POLLING] Notif update status (${ticket.status}) terkirim ke ${jid}`);
+                    }
+                }
+
+                // Simpan atau update status terbaru ke memori
+                ticketStatusCache.set(ticket.id, ticket.status);
+            }
+        } catch (error) {
+            console.error('[POLLING ERROR] Gagal mengecek tiket:', error?.message);
+        }
+    }, 60 * 1000); // 60.000 ms = 1 menit
+};
 
 const startApiServer = () => {
     if (apiServer) return apiServer;
@@ -83,6 +148,9 @@ const startBot = async () => {
 
             if (connection === 'open') {
                 console.log('\n[BERHASIL] Bot sudah terhubung dan siap menerima pesan!\n');
+
+                // JALANKAN POLLING SAAT BOT READY
+                startTicketPolling(currentSock);
                 return;
             }
 
