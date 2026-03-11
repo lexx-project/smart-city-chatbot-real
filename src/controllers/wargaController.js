@@ -215,14 +215,12 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       // Jika tidak ada caption, gunakan teks default
       captionText = rawMsg?.imageMessage?.caption?.trim() || "Tanpa Keterangan";
 
-      // BYPASS: Jika isReportType bernilai true (Abaikan inputType text/number)
+      // BYPASS: Jika isReportType bernilai true (Foto Opsional, bisa teks saja)
       if (isReportType) {
-        if (!isImage) {
-          // HANYA tolak jika yang dikirim BUKAN gambar (misal: cuma teks)
-          errorMsg = "⚠️ *Format Tidak Sesuai*\n\nMohon kirimkan lampiran FOTO sebagai bukti laporan Anda. Keterangan teks bersifat opsional.";
-        } else {
+        if (isImage) {
+          // Kondisi 1: Warga mengirimkan FOTO (dengan atau tanpa caption)
           try {
-            await sock.sendMessage(jid, { text: "⏳ _Mengunggah foto ke server..._" });
+            await sock.sendMessage(jid, { text: "⏳ _Mengunggah data laporan ke server..._" });
             const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console });
             const fileName = `evidence_${Date.now()}.jpg`;
 
@@ -230,15 +228,23 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
             const secureUrl = await uploadImageToBackend(buffer, fileName);
 
             if (secureUrl) {
-              finalAnswer = `[FOTO TERLAMPIR] ${captionText}`;
+              finalAnswer = captionText !== "Tanpa Keterangan" ? captionText : "Laporan dengan lampiran gambar";
               session.imageUrl = secureUrl; // Simpan URL untuk payload tiket
-              session.answers[currentStep.stepKey] = finalAnswer;
+              session.lastReportDescription = finalAnswer; // Simpan deskripsi akhir
             } else {
               errorMsg = "⚠️ Gagal mengunggah gambar ke server. Silakan coba kirim ulang.";
             }
           } catch (err) {
             console.error("[DOWNLOAD/UPLOAD_ERROR]", err);
-            errorMsg = "⚠️ Terjadi kesalahan saat memproses gambar.";
+            errorMsg = "⚠️ Terjadi kesalahan saat memproses lampiran gambar.";
+          }
+        } else {
+          // Kondisi 2: Warga HANYA mengirimkan TEKS (tanpa foto)
+          if (!normalizedText) {
+            errorMsg = "⚠️ Deskripsi laporan tidak boleh kosong. Silakan ketikkan detail laporan Anda.";
+          } else {
+            finalAnswer = normalizedText;
+            session.lastReportDescription = finalAnswer; // Simpan teks sebagai deskripsi akhir
           }
         }
       } else {
@@ -308,6 +314,9 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       let rule = currentStep.validationRule;
       let isValid = true;
 
+      // Cukup gunakan normalizedText karena sudah diekstrak oleh messageMiddleware
+      let textToValidate = normalizedText;
+
       if (rule.startsWith('regex:')) {
         let patternStr = rule.substring(6);
         let pattern = patternStr;
@@ -320,13 +329,23 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         }
 
         try {
-          isValid = new RegExp(pattern, flags).test(normalizedText);
+          isValid = new RegExp(pattern, flags).test(textToValidate);
+
+          // CCTV DEBUGGING REGEX
+          console.log("=== [DEBUG REGEX] ===");
+          console.log("Rule asli:", rule);
+          console.log("Pattern diekstrak:", pattern);
+          console.log("Teks diuji:", textToValidate);
+          console.log("Hasil Validasi:", isValid);
+          console.log("=====================");
+
         } catch (e) {
+          console.error("[REGEX_EXEC_ERROR]", e);
           isValid = true;
         }
       } else {
         try {
-          isValid = new RegExp(rule).test(normalizedText);
+          isValid = new RegExp(rule).test(textToValidate);
         } catch (e) {
           isValid = true;
         }
@@ -423,8 +442,10 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         return true;
       }
 
+      const finalDescription = session.lastReportDescription || normalizedText || "Laporan Warga (Tanpa Deskripsi)";
+
       const ticketPayload = {
-        description: JSON.stringify(session.answers, null, 2),
+        description: finalDescription,
         userId,
         categoryId,
         sessionId: session.beSessionId,
