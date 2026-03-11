@@ -148,7 +148,17 @@ const uploadImageToBackend = async (buffer, fileName) => {
         const res = await nestClient.post('/upload/single', form, {
             headers: { ...form.getHeaders() }
         });
-        return res.data?.secureUrl || res.data?.url || null;
+
+        // Debug log untuk melihat struktur response
+        console.log("=== [DEBUG UPLOAD IMAGE] ===");
+        console.log(JSON.stringify(res?.data || res, null, 2));
+        console.log("============================");
+
+        // Ekstrak data dari berbagai kemungkinan struktur wrapper
+        const responseData = res?.data?.data || res?.data || res;
+
+        // Return URL aman, URL biasa, atau null jika gagal
+        return responseData?.secureUrl || responseData?.url || responseData?.secure_url || null;
     } catch (err) {
         console.error('[UPLOAD_IMAGE_ERROR]', err?.response?.data || err.message);
         return null;

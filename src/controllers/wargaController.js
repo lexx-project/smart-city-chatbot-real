@@ -203,6 +203,9 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   if (currentStep.id !== "root_menu" && currentStep.stepKey !== "main_menu") {
     const isSelectMode = children.length > 1;
 
+    // FIX: Deteksi tipe report dari messageType, BUKAN dari inputType
+    const isReportType = currentStep.messages?.[0]?.messageType === "report";
+
     if (!isSelectMode) {
       let finalAnswer = normalizedText;
 
@@ -212,8 +215,8 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
       // Jika tidak ada caption, gunakan teks default
       captionText = rawMsg?.imageMessage?.caption?.trim() || "Tanpa Keterangan";
 
-      // BYPASS: Jika inputType "report"
-      if (currentStep.inputType === "report") {
+      // BYPASS: Jika isReportType bernilai true (Abaikan inputType text/number)
+      if (isReportType) {
         if (!isImage) {
           // HANYA tolak jika yang dikirim BUKAN gambar (misal: cuma teks)
           errorMsg = "⚠️ *Format Tidak Sesuai*\n\nMohon kirimkan lampiran FOTO sebagai bukti laporan Anda. Keterangan teks bersifat opsional.";
@@ -239,7 +242,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
           }
         }
       } else {
-        // Jika bukan "report", jalankan validasi normal
+        // Jika BUKAN report, jalankan validasi normal berdasarkan inputType
         errorMsg = validateInput(
           normalizedText,
           currentStep.inputType,
@@ -256,17 +259,18 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         return true;
       }
 
-      // Simpan jawaban (teks normal atau nama file gambar)
-      if (currentStep.inputType !== "report") {
+      // Simpan jawaban (teks normal) jika BUKAN tipe report
+      if (!isReportType) {
         session.answers[currentStep.stepKey] = finalAnswer;
       }
     }
-  }
 
-  if (session && session.beSessionId && currentStep.inputType !== "report") {
-    await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', normalizedText);
-  } else if (session && session.beSessionId && currentStep.inputType === "report" && !errorMsg) {
-    await logMessageToBackend(session.beSessionId, 'USER', 'IMAGE', `[GAMBAR DIUNGGAH] ${captionText}`);
+    // LOGGING CHAT KE BACKEND
+    if (session && session.beSessionId && !isReportType) {
+      await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', normalizedText);
+    } else if (session && session.beSessionId && isReportType && !errorMsg) {
+      await logMessageToBackend(session.beSessionId, 'USER', 'IMAGE', `[GAMBAR DIUNGGAH] ${captionText}`);
+    }
   }
 
   // TENTUKAN LANGKAH BERIKUTNYA
