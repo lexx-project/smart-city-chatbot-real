@@ -426,8 +426,24 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
 
       const flowId = currentStep.flowId || null;
 
+      // --- LOGIC EKSTRAK NAMA & LAPORAN ---
+      let rawDescription = session.lastReportDescription || normalizedText || "Laporan Warga (Tanpa Deskripsi)";
+      let pelaporName = pushName; // Default pakai nama profil WA
+      let finalDescription = rawDescription;
+
+      if (rawDescription.includes('#')) {
+        // Bersihkan embel-embel foto dari sistem jika ada
+        let cleanText = rawDescription.replace('[FOTO TERLAMPIR]', '').trim();
+        const parts = cleanText.split('#');
+
+        if (parts.length >= 3) {
+          pelaporName = parts[0].trim(); // Ambil NAMA
+          finalDescription = parts.slice(2).join('#').trim(); // Ambil sisa teks sebagai LAPORAN murni
+        }
+      }
+
       const [userId, categoryId] = await Promise.all([
-        getOrCreateUser(phone, pushName),
+        getOrCreateUser(phone, pelaporName), // Panggil API pakai nama yang baru diekstrak
         getCategoryIdFromFlow(flowId),
       ]);
 
@@ -442,10 +458,8 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
         return true;
       }
 
-      const finalDescription = session.lastReportDescription || normalizedText || "Laporan Warga (Tanpa Deskripsi)";
-
       const ticketPayload = {
-        description: finalDescription,
+        description: finalDescription, // Tiket SEKARANG hanya berisi laporannya saja
         userId,
         categoryId,
         sessionId: session.beSessionId,

@@ -80,14 +80,25 @@ setInterval(syncFlowsCache, 5 * 60 * 1000); // Polling setiap 5 menit
 // ── USER SYNC (Target PM: Data Contact) ──
 
 const getOrCreateUser = async (phone, name) => {
-    // Cari user berdasarkan nomor HP (BE menggunakan query param 'search')
+    // Cari user berdasarkan nomor HP
     const search = await requestWithRetry('GET', '/users', null, { search: phone });
     const list = search?.data || search;
 
-    // Jika user sudah ada, kembalikan ID-nya
-    if (Array.isArray(list) && list.length > 0) return list[0].id;
+    // Jika user sudah ada, kembalikan ID-nya (dan update namanya jika berbeda)
+    if (Array.isArray(list) && list.length > 0) {
+        const user = list[0];
+        if (name && name !== "Warga" && user.fullName !== name) {
+            try {
+                // Tembak API PATCH untuk update nama di database sesuai input form
+                await requestWithRetry('PATCH', `/users/${user.id}`, { fullName: name });
+            } catch (err) {
+                console.log("[USER_SYNC] Abaikan error PATCH nama, lanjut pakai nama lama.");
+            }
+        }
+        return user.id;
+    }
 
-    // Jika belum ada, buat warga baru menggunakan 'fullName' sesuai schema BE
+    // Jika belum ada, buat warga baru
     const create = await requestWithRetry('POST', '/users', {
         phoneNumber: String(phone),
         fullName: name
