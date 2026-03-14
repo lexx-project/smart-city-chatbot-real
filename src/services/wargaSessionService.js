@@ -15,6 +15,7 @@ const startSession = (jid, sock, initialStepId = null, flowMode = 'static', time
         startTime: Date.now(),
         lastInteraction: Date.now(),
         currentStepId: initialStepId,
+        stepHistory: [], // Menambahkan array untuk mengingat riwayat menu
         flowMode: flowMode,
         answers: {}, // Tempat menyimpan jawaban per stepKey
         timeoutId: null,

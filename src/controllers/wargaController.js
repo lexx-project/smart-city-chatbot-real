@@ -60,7 +60,7 @@ const validateInput = (text, inputType, rule) => {
   return null;
 };
 
-const buildMenuMessage = (stepData) => {
+const buildMenuMessage = (stepData, isMainMenu = false) => {
   let text = "";
   if (stepData.messages && stepData.messages.length > 0) {
     text += stepData.messages.map((m) => m.messageText).join("\n\n") + "\n\n";
@@ -74,6 +74,11 @@ const buildMenuMessage = (stepData) => {
       text += `*${no}.* ${label}\n`;
     });
     text += `\n_Ketik angka pilihan Anda._`;
+  }
+
+  // Tambahkan navigasi otomatis jika bukan Menu Utama
+  if (!isMainMenu) {
+    text += `\n\n*[9]* Kembali ke Sebelumnya\n*[0]* Kembali ke Menu Utama`;
   }
   return text.trim();
 };
@@ -173,7 +178,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     let msgToSend = adminSettings.GREETING_MSG
       ? `${adminSettings.GREETING_MSG}\n\n`
       : "";
-    msgToSend += buildMenuMessage(mainMenu);
+    msgToSend += buildMenuMessage(mainMenu, true);
 
     await sock.sendMessage(jid, { text: msgToSend });
     await logMessageToBackend(beSessionId, 'BOT', 'TEXT', msgToSend);
@@ -199,6 +204,63 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   let nextStepId = null;
   let errorMsg = null;
   let captionText = "";
+
+  const isCurrentMainMenu = currentStep.id === "root_menu" || currentStep.stepKey === "main_menu";
+
+  // --- LOGIC NAVIGASI 9 & 0 ---
+  if (!isCurrentMainMenu) {
+    if (normalizedText === "0") {
+      const rawMenu = await getMainMenu();
+      const mainMenu = rawMenu?.data || rawMenu;
+      if (mainMenu) {
+        updateSession(jid, { currentStepId: mainMenu.id, stepHistory: [] });
+        let msgToSend = buildMenuMessage(mainMenu, true);
+        await sock.sendMessage(jid, { text: msgToSend });
+        if (session.beSessionId) {
+          await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', "0");
+          await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', msgToSend);
+        }
+      }
+      return true;
+    }
+
+    if (normalizedText === "9") {
+      let prevStepId = null;
+      let currentHistory = session.stepHistory || [];
+
+      if (currentHistory.length > 0) {
+        prevStepId = currentHistory.pop(); // Ambil step sebelumnya
+      }
+
+      if (!prevStepId || prevStepId === "root_menu" || prevStepId === "main_menu") {
+        const rawMenu = await getMainMenu();
+        const mainMenu = rawMenu?.data || rawMenu;
+        if (mainMenu) {
+          updateSession(jid, { currentStepId: mainMenu.id, stepHistory: [] });
+          let msgToSend = buildMenuMessage(mainMenu, true);
+          await sock.sendMessage(jid, { text: msgToSend });
+          if (session.beSessionId) {
+            await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', "9");
+            await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', msgToSend);
+          }
+        }
+      } else {
+        const rawPrev = await getStep(prevStepId);
+        const prevStep = rawPrev?.data || rawPrev;
+        if (prevStep) {
+          updateSession(jid, { currentStepId: prevStep.id, stepHistory: currentHistory });
+          let msgToSend = buildMenuMessage(prevStep, false);
+          await sock.sendMessage(jid, { text: msgToSend });
+          if (session.beSessionId) {
+            await logMessageToBackend(session.beSessionId, 'USER', 'TEXT', "9");
+            await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', msgToSend);
+          }
+        }
+      }
+      return true;
+    }
+  }
+  // --- END LOGIC NAVIGASI ---
 
   if (currentStep.id !== "root_menu" && currentStep.stepKey !== "main_menu") {
     const isSelectMode = children.length > 1;
@@ -503,7 +565,7 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
   const nextActiveMsg = nextStep.messages?.[0];
   const isNextInfoOrSuccess = nextActiveMsg && ['info', 'success'].includes(nextActiveMsg.messageType);
 
-  let nextMsg = buildMenuMessage(nextStep);
+  let nextMsg = buildMenuMessage(nextStep, nextStep.id === 'root_menu');
   if (!nextMsg) nextMsg = "Lanjut ke tahap berikutnya...";
 
   if (isNextInfoOrSuccess) {
@@ -516,7 +578,11 @@ const handleWargaMessage = async (sock, msg, bodyText = "") => {
     return true;
   }
 
-  updateSession(jid, { currentStepId: nextStep.id, answers: session.answers });
+  let newHistory = session.stepHistory || [];
+  if (currentStep.id !== "root_menu" && currentStep.stepKey !== "main_menu") {
+    newHistory.push(currentStep.id); // Simpan jejak langkah
+  }
+  updateSession(jid, { currentStepId: nextStep.id, answers: session.answers, stepHistory: newHistory });
   await sock.sendMessage(jid, { text: nextMsg });
   if (session.beSessionId) {
     await logMessageToBackend(session.beSessionId, 'BOT', 'TEXT', nextMsg);
